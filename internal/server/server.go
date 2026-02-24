@@ -18,27 +18,31 @@ import (
 )
 
 type Config struct {
-	Port    string `yaml:"port"`
-	DataDir string `yaml:"data_dir"`
-	LogFile string `yaml:"log_file"`
+	Port      string `yaml:"port"`
+	DataDir   string `yaml:"data_dir"`
+	LogFile   string `yaml:"log_file"`
+	EnableMCP bool   `yaml:"enable_mcp"`
+	Extension string `yaml:"extension"`
 }
 
 type Server struct {
-	store    *store.Store
-	hub      *Hub
-	addr     string
-	pidFile  string
-	mux      *http.ServeMux
-	http     *http.Server
+	store     *store.Store
+	hub       *Hub
+	addr      string
+	pidFile   string
+	mux       *http.ServeMux
+	http      *http.Server
+	config    *Config
 }
 
-func NewServer(store *store.Store, hub *Hub, addr string, pidFile string) *Server {
+func NewServer(store *store.Store, hub *Hub, cfg *Config, pidFile string) *Server {
 	s := &Server{
 		store:   store,
 		hub:     hub,
-		addr:    addr,
+		addr:    cfg.Port,
 		pidFile: pidFile,
 		mux:     http.NewServeMux(),
+		config:  cfg,
 	}
 	s.routes()
 	return s
@@ -56,6 +60,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("PUT /api/tasks/{id}", s.handleUpdateTask)
 	s.mux.HandleFunc("DELETE /api/tasks/{id}", s.handleDeleteTask)
 	s.mux.HandleFunc("POST /internal/sync", s.handleSync)
+	s.mux.HandleFunc("GET /internal/config", s.handleConfig)
+	s.mux.HandleFunc("GET /internal/extension", s.handleExtension)
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -308,6 +314,33 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
+	cfg := map[string]interface{}{
+		"port":      s.config.Port,
+		"data_dir":  s.config.DataDir,
+		"enable_mcp": s.config.EnableMCP,
+		"extension": s.config.Extension,
+	}
+	s.writeJSON(w, cfg)
+}
+
+func (s *Server) handleExtension(w http.ResponseWriter, r *http.Request) {
+	if s.config.Extension == "" {
+		s.writeError(w, "no extension detected", http.StatusNotFound)
+		return
+	}
+
+	data, err := os.ReadFile(s.config.Extension)
+	if err != nil {
+		s.writeError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/typescript")
+	w.Header().Set("X-Extension-Path", s.config.Extension)
+	w.Write(data)
+}
+
 func (s *Server) extractID(r *http.Request) string {
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/"), "/")
 
@@ -361,10 +394,37 @@ func LoadConfig(path string) (*Config, error) {
 		cfg.DataDir = "~/.segments"
 	}
 
+	cfg = detectExtensions(cfg)
+
+
 	return &cfg, nil
 }
 
-func expandPath(path string) string {
+func detectExtensions(cfg Config) Config {
+	home, _ := os.UserHomeDir()
+	dataDir := ExpandPath(cfg.DataDir)
+
+	mcpPipe := filepath.Join(dataDir, "mcp.stdin")
+	if _, err := os.Stat(mcpPipe); err == nil {
+		cfg.EnableMCP = true
+	}
+
+	piExtPaths := []string{
+		filepath.Join(dataDir, "..", ".pi", "extensions", "segments.ts"),
+		filepath.Join(home, "Dev", "segments", ".pi", "extensions", "segments.ts"),
+	}
+
+	for _, p := range piExtPaths {
+		if _, err := os.Stat(p); err == nil {
+			cfg.Extension = p
+			break
+		}
+	}
+
+	return cfg
+}
+
+func ExpandPath(path string) string {
 	expanded := os.ExpandEnv(path)
 	if strings.HasPrefix(expanded, "~") {
 		home, err := os.UserHomeDir()
