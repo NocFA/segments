@@ -8,6 +8,7 @@ const (
 	StatusTodo       TaskStatus = "todo"
 	StatusInProgress TaskStatus = "in_progress"
 	StatusDone       TaskStatus = "done"
+	StatusClosed     TaskStatus = "closed"
 	StatusBlocker    TaskStatus = "blocker"
 )
 
@@ -21,6 +22,7 @@ type Task struct {
 	BlockedBy string     `json:"blocked_by,omitempty"`
 	CreatedAt time.Time  `json:"created_at"`
 	UpdatedAt time.Time  `json:"updated_at"`
+	ClosedAt  *time.Time `json:"closed_at,omitempty"`
 	SortOrder int        `json:"sort_order"`
 }
 

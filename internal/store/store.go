@@ -142,6 +142,23 @@ func (s *Store) ListProjects() ([]models.Project, error) {
 	return projects, nil
 }
 
+func (s *Store) UpdateProject(id, name string) (*models.Project, error) {
+	proj, err := s.GetProject(id)
+	if err != nil {
+		return nil, err
+	}
+
+	proj.Name = name
+	proj.UpdatedAt = time.Now()
+
+	data, err := json.Marshal(proj)
+	if err != nil {
+		return nil, err
+	}
+
+	return proj, os.WriteFile(filepath.Join(s.basePath, "projects", id, "meta.json"), data, 0644)
+}
+
 func (s *Store) DeleteProject(id string) error {
 	projPath := filepath.Join(s.basePath, "projects", id)
 	if err := os.RemoveAll(projPath); err != nil {
@@ -367,7 +384,14 @@ func (s *Store) UpdateTask(projectID, taskID string, title, body string, status 
 		BlockedBy: blockedByVal,
 		CreatedAt: existing.CreatedAt,
 		UpdatedAt: now,
+		ClosedAt:  existing.ClosedAt,
 		SortOrder: existing.SortOrder,
+	}
+
+	if (status == models.StatusDone || status == models.StatusClosed) && existing.ClosedAt == nil {
+		updated.ClosedAt = &now
+	} else if status != models.StatusDone && status != models.StatusClosed {
+		updated.ClosedAt = nil
 	}
 
 	data, err := json.Marshal(updated)

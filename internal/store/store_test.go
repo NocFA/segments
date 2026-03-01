@@ -144,7 +144,7 @@ func TestUpdateTask(t *testing.T) {
 	proj, _ := s.CreateProject("test-project")
 	created, _ := s.CreateTask(proj.ID, "original", "body", 0)
 
-	updated, err := s.UpdateTask(proj.ID, created.ID, "updated", "new body", models.StatusInProgress, 1)
+	updated, err := s.UpdateTask(proj.ID, created.ID, "updated", "new body", models.StatusInProgress, 1, "")
 	if err != nil {
 		t.Fatalf("UpdateTask error: %v", err)
 	}
