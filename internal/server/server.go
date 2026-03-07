@@ -3,7 +3,6 @@ package server
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net"
 	"net/http"
@@ -53,6 +52,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /ws", s.hub.ServeHTTP)
 	s.mux.HandleFunc("GET /api/projects", s.handleListProjects)
 	s.mux.HandleFunc("POST /api/projects", s.handleCreateProject)
+	s.mux.HandleFunc("PUT /api/projects/{id}", s.handleUpdateProject)
 	s.mux.HandleFunc("DELETE /api/projects/{id}", s.handleDeleteProject)
 	s.mux.HandleFunc("GET /api/projects/{id}/tasks", s.handleListTasks)
 	s.mux.HandleFunc("POST /api/projects/{id}/tasks", s.handleCreateTask)
@@ -162,6 +162,35 @@ func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.hub.Broadcast(WSMessage{Type: "project:created", Data: proj})
+	s.writeJSON(w, proj)
+}
+
+func (s *Server) handleUpdateProject(w http.ResponseWriter, r *http.Request) {
+	id := s.extractID(r)
+	if id == "" {
+		s.writeError(w, "id required", http.StatusBadRequest)
+		return
+	}
+
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.writeError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Name == "" {
+		s.writeError(w, "name required", http.StatusBadRequest)
+		return
+	}
+
+	proj, err := s.store.UpdateProject(id, req.Name)
+	if err != nil {
+		s.writeError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	s.hub.Broadcast(WSMessage{Type: "project:updated", Data: proj})
 	s.writeJSON(w, proj)
 }
 
@@ -342,24 +371,7 @@ func (s *Server) handleExtension(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) extractID(r *http.Request) string {
-	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/"), "/")
-
-	for i, part := range parts {
-		if part == "tasks" && i == len(parts)-2 {
-			return parts[i+1]
-		}
-		if part == "projects" && i+1 < len(parts) && parts[i+1] != "tasks" {
-			return parts[i+1]
-		}
-		if part == "tasks" && i > 0 && parts[i-1] != "projects" {
-			return parts[i-1]
-		}
-	}
-
-	if len(parts) >= 2 {
-		return parts[len(parts)-1]
-	}
-	return ""
+	return r.PathValue("id")
 }
 
 func (s *Server) writeJSON(w http.ResponseWriter, v interface{}) {
@@ -401,20 +413,20 @@ func LoadConfig(path string) (*Config, error) {
 }
 
 func detectExtensions(cfg Config) Config {
-	home, _ := os.UserHomeDir()
 	dataDir := ExpandPath(cfg.DataDir)
 
-	mcpPipe := filepath.Join(dataDir, "mcp.stdin")
-	if _, err := os.Stat(mcpPipe); err == nil {
+	if _, err := os.Stat(filepath.Join(dataDir, "mcp.stdin")); err == nil {
 		cfg.EnableMCP = true
 	}
 
-	piExtPaths := []string{
+	// Check for pi extension relative to data dir, then cwd
+	candidates := []string{
 		filepath.Join(dataDir, "..", ".pi", "extensions", "segments.ts"),
-		filepath.Join(home, "Dev", "segments", ".pi", "extensions", "segments.ts"),
 	}
-
-	for _, p := range piExtPaths {
+	if cwd, err := os.Getwd(); err == nil {
+		candidates = append(candidates, filepath.Join(cwd, ".pi", "extensions", "segments.ts"))
+	}
+	for _, p := range candidates {
 		if _, err := os.Stat(p); err == nil {
 			cfg.Extension = p
 			break
@@ -440,5 +452,3 @@ func init() {
 	log.SetOutput(os.Stderr)
 	log.SetFlags(0)
 }
-
-var _ = io.Discard
