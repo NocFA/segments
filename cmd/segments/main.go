@@ -10,7 +10,7 @@ import (
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Println("usage: segments <command>")
-		fmt.Println("commands: serve, init, projects, tasks, add, done, update, rm, status, mcp")
+		fmt.Println("  start, stop, list, add, done, rename, setup, shell, uninstall")
 		os.Exit(1)
 	}
 

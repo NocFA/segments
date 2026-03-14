@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,7 +13,6 @@ import (
 	"strconv"
 	"strings"
 
-
 	"codeberg.org/nocfa/segments/internal/models"
 	"codeberg.org/nocfa/segments/internal/server"
 	"codeberg.org/nocfa/segments/internal/store"
@@ -20,18 +20,17 @@ import (
 	"github.com/mattn/go-isatty"
 )
 
-func isTerminal() bool {
-	return isatty.IsTerminal(os.Stdout.Fd())
-}
+//go:embed segments.ts
+var piExtensionTS string
 
 var (
-	cyan    = lipgloss.NewStyle().Foreground(lipgloss.Color("#4a9eff"))
-	green   = lipgloss.NewStyle().Foreground(lipgloss.Color("#4ade80"))
-	yellow  = lipgloss.NewStyle().Foreground(lipgloss.Color("#fbbf24"))
-	red     = lipgloss.NewStyle().Foreground(lipgloss.Color("#f87171"))
-	dim     = lipgloss.NewStyle().Foreground(lipgloss.Color("#737373"))
-	bold    = lipgloss.NewStyle().Bold(true)
-	box     = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("#333")).Padding(1, 2)
+	cyan  = lipgloss.NewStyle().Foreground(lipgloss.Color("#4a9eff"))
+	green = lipgloss.NewStyle().Foreground(lipgloss.Color("#4ade80"))
+	yellow = lipgloss.NewStyle().Foreground(lipgloss.Color("#fbbf24"))
+	red   = lipgloss.NewStyle().Foreground(lipgloss.Color("#f87171"))
+	dim   = lipgloss.NewStyle().Foreground(lipgloss.Color("#737373"))
+	bold  = lipgloss.NewStyle().Bold(true)
+	box   = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("#333")).Padding(1, 2)
 )
 
 var dataDir = func() string {
@@ -44,16 +43,16 @@ var dataDir = func() string {
 
 var pidFile = filepath.Join(dataDir, "pid")
 
+func isTerminal() bool {
+	return isatty.IsTerminal(os.Stdout.Fd())
+}
+
 func getPID() int {
 	data, err := os.ReadFile(pidFile)
 	if err != nil {
 		return 0
 	}
-	lines := strings.Split(string(data), "\n")
-	if len(lines) < 1 {
-		return 0
-	}
-	pid, _ := strconv.Atoi(strings.TrimSpace(lines[0]))
+	pid, _ := strconv.Atoi(strings.TrimSpace(strings.SplitN(string(data), "\n", 2)[0]))
 	return pid
 }
 
@@ -62,11 +61,8 @@ func isRunning() bool {
 	if pid == 0 {
 		return false
 	}
-	proc, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-	return proc.Pid == pid
+	p, err := os.FindProcess(pid)
+	return err == nil && p.Pid == pid
 }
 
 func pidFileData() (int, string, error) {
@@ -74,7 +70,7 @@ func pidFileData() (int, string, error) {
 	if err != nil {
 		return 0, "", err
 	}
-	lines := strings.Split(string(data), "\n")
+	lines := strings.SplitN(string(data), "\n", 3)
 	if len(lines) < 2 {
 		return 0, "", fmt.Errorf("invalid pid file")
 	}
@@ -82,8 +78,7 @@ func pidFileData() (int, string, error) {
 	if err != nil {
 		return 0, "", err
 	}
-	port := strings.TrimSpace(lines[1])
-	return pid, port, nil
+	return pid, strings.TrimSpace(lines[1]), nil
 }
 
 func notifyServer() {
@@ -91,77 +86,65 @@ func notifyServer() {
 	if err != nil {
 		return
 	}
-	process, err := os.FindProcess(pid)
-	if err != nil || process.Pid != pid {
+	if p, err := os.FindProcess(pid); err != nil || p.Pid != pid {
 		return
 	}
 	http.Post("http://localhost:"+port+"/internal/sync", "application/json", bytes.NewReader(nil))
 }
 
+// aliases maps user-facing command names to internal ones.
+var aliases = map[string]string{
+	"start":     "serve",
+	"stop":      "stop",
+	"uninstall": "remove",
+	"remove":    "remove",
+	"list":      "list",
+	"status":    "list",
+}
+
 func Run(args []string) error {
 	if len(args) < 2 {
-		return fmt.Errorf("usage: segments <command>\nvalid commands:\n  sg init, sg start, sg stop, sg list, sg add, sg done\n  sg uninstall (or: segments setup)")
+		fmt.Println("usage: segments <command>")
+		fmt.Println("  start, stop, list, add, done, rename, setup, shell, uninstall")
+		return nil
 	}
 
 	cmd := args[1]
+	rest := args[2:]
 
-	// Handle sg prefix: 'sg start' -> 'segments serve'
-	// Also handle when called as alias: 'segments start' -> 'segments serve'
-	if cmd == "sg" || (len(args) >= 2 && (args[1] == "start" || args[1] == "stop" || args[1] == "list" || args[1] == "uninstall")) {
-		if len(args) < 2 {
-			fmt.Println("sg: usage: sg <command>")
-			fmt.Println("sg: valid commands: start, stop, list, uninstall, add, done, update, rm, tasks, beads")
-			return nil
-		}
-		var subCmd string
-		switch args[1] {
-		case "start":
-			subCmd = "serve"
-		case "stop":
-			subCmd = "stop"
-		case "uninstall", "remove":
-			subCmd = "remove"
-		case "status", "list":
-			subCmd = "list"
-		case "add", "done", "update", "rm", "tasks", "beads":
-			subCmd = args[1]
-		default:
-			fmt.Fprintf(os.Stderr, "sg: unknown command %s\n", args[1])
-			fmt.Fprintf(os.Stderr, "valid: start, stop, list, uninstall, add, done, update, rm, tasks, beads\n")
-			return nil
-		}
-		// Rebuild args: [segments, subCmd, rest...]
-		newArgs := make([]string, 0, len(args))
-		newArgs = append(newArgs, args[0])
-		newArgs = append(newArgs, subCmd)
-		newArgs = append(newArgs, args[2:]...)
-		args = newArgs
-		cmd = subCmd
+	if mapped, ok := aliases[cmd]; ok {
+		cmd = mapped
 	}
 
 	s := store.NewStore(expandPath(dataDir))
 
 	switch cmd {
-	case "serve", "start":
+	case "serve":
 		return runServe(s)
 	case "stop":
 		return runStop()
 	case "init":
 		return runInit(s)
-	case "list", "status":
-		return runList(s, args[2:])
+	case "list":
+		return runList(s, rest)
 	case "add":
-		return runAdd(s, args[2:])
+		return runAdd(s, rest)
 	case "done":
-		return runDone(s, args[2:])
+		return runDone(s, rest)
+	case "close":
+		return runClose(s, rest)
+	case "rename":
+		return runRename(s, rest)
 	case "beads":
-		return runBeads(s, args[2:])
+		return runBeads(s, rest)
 	case "setup":
-		return runSetup()
+		return runSetup(s)
 	case "shell":
 		return runShell()
-	case "remove", "uninstall":
+	case "remove":
 		return runRemove()
+	case "mcp":
+		return mcpServer(s)
 	default:
 		return fmt.Errorf("unknown command: %s", cmd)
 	}
@@ -172,79 +155,74 @@ func runServe(s *store.Store) error {
 		return runServeDaemon(s)
 	}
 
-	_, err := server.LoadConfig(filepath.Join(dataDir, "config.yaml"))
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "config load error: %v\n", err)
-	}
-
 	if isRunning() {
-		return fmt.Errorf("segments is already running (pid: %d)", getPID())
+		return fmt.Errorf("already running (pid: %d)", getPID())
 	}
 
-	// Auto-detect integrations in current project
+	server.LoadConfig(filepath.Join(dataDir, "config.yaml"))
 	autoDetectIntegrations()
 
 	cmd := exec.Command(os.Args[0], "serve")
 	cmd.Env = append(os.Environ(), "SEGMENTS_DAEMON=1")
-	home, _ := os.UserHomeDir()
-	logFile := filepath.Join(home, ".segments", "daemon.log")
-	if f, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644); err == nil {
+	logPath := filepath.Join(dataDir, "daemon.log")
+	if f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644); err == nil {
 		cmd.Stdout = f
 		cmd.Stderr = f
 	}
 
-	cmd.Start()
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("start daemon: %w", err)
+	}
+
 	fmt.Println()
-	fmt.Println(bold.Render("Segments started ") + green.Render("(pid: "+fmt.Sprintf("%d", cmd.Process.Pid)+")"))
+	fmt.Println(bold.Render("Segments started ") + green.Render("(pid: "+strconv.Itoa(cmd.Process.Pid)+")"))
 	fmt.Println(bold.Render("Run: ") + cyan.Render("sg list") + dim.Render(" | sg shell"))
+	fmt.Println()
 	return nil
 }
 
 func autoDetectIntegrations() {
 	cwd, _ := os.Getwd()
-	var detected []string
+	var found []string
 
 	piExt := filepath.Join(cwd, ".pi", "extensions")
-	if _, err := os.Stat(piExt); err == nil {
-		if files, err := os.ReadDir(piExt); err == nil {
-			for _, f := range files {
-				if strings.HasPrefix(f.Name(), "segments") {
-					detected = append(detected, "  → Pi: "+cyan.Render(f.Name()))
-					break
-				}
+	if entries, err := os.ReadDir(piExt); err == nil {
+		for _, f := range entries {
+			if strings.HasPrefix(f.Name(), "segments") {
+				found = append(found, "  Pi: "+cyan.Render(f.Name()))
+				break
 			}
 		}
 	}
 	if _, err := os.Stat(filepath.Join(cwd, "opencode.json")); err == nil {
-		detected = append(detected, "  → OpenCode MCP")
+		found = append(found, "  OpenCode MCP")
 	}
-	beadsDir := filepath.Join(cwd, ".beads")
-	if _, err := os.Stat(beadsDir); err == nil {
-		if _, err := os.Stat(filepath.Join(beadsDir, "issues.jsonl")); err == nil {
-			detected = append(detected, "  → Beads")
-		}
+	if _, err := os.Stat(filepath.Join(cwd, ".beads", "issues.jsonl")); err == nil {
+		found = append(found, "  Beads")
 	}
 
-	if len(detected) > 0 {
-		fmt.Println()
-		for _, d := range detected {
-			fmt.Printf("%s\n", d)
-		}
-		fmt.Println()
-		fmt.Println(dim.Render("Run: ") + cyan.Render("sg setup") + dim.Render("  to configure"))
-		fmt.Println(dim.Render("  or: ") + cyan.Render("sg beads") + dim.Render("  to import"))
+	if len(found) == 0 {
+		return
 	}
+
+	fmt.Println()
+	for _, f := range found {
+		fmt.Println(f)
+	}
+	fmt.Println()
+	fmt.Println(dim.Render("Run: ") + cyan.Render("sg setup") + dim.Render("  to configure"))
+	fmt.Println(dim.Render("  or: ") + cyan.Render("sg beads") + dim.Render("  to import"))
 }
 
 func runServeDaemon(s *store.Store) error {
 	cfg, err := server.LoadConfig(filepath.Join(dataDir, "config.yaml"))
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "config load error: %v\n", err)
+		fmt.Fprintf(os.Stderr, "config: %v\n", err)
 	}
 
 	dir := server.ExpandPath(cfg.DataDir)
 	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("mkdir: %w", err)
+		return err
 	}
 
 	s = store.NewStore(dir)
@@ -252,32 +230,33 @@ func runServeDaemon(s *store.Store) error {
 	srv := server.NewServer(s, hub, cfg, pidFile)
 
 	if cfg.Extension != "" {
-		fmt.Printf("Auto-loaded extension: %s\n", cfg.Extension)
+		fmt.Printf("Extension: %s\n", cfg.Extension)
 	}
 	if cfg.EnableMCP {
 		fmt.Println("MCP: enabled")
 	}
 
-	fmt.Println("Starting Segments server...")
 	return srv.Start()
 }
 
 func runStop() error {
 	if !isRunning() {
-		return fmt.Errorf("segments is not running")
+		return fmt.Errorf("not running")
 	}
 
 	pid := getPID()
 	proc, err := os.FindProcess(pid)
 	if err != nil {
-		return fmt.Errorf("find process: %w", err)
+		return err
 	}
 
 	if err := proc.Signal(os.Interrupt); err != nil {
-		return fmt.Errorf("signal: %w", err)
+		return err
 	}
+
 	fmt.Println()
-	fmt.Println(bold.Render("Segments stopped ") + red.Render("(pid: "+fmt.Sprintf("%d", pid)+")"))
+	fmt.Println(bold.Render("Segments stopped ") + red.Render("(pid: "+strconv.Itoa(pid)+")"))
+	fmt.Println()
 	return nil
 }
 
@@ -288,12 +267,12 @@ func runList(s *store.Store, args []string) error {
 	}
 
 	if len(projects) == 0 {
-		fmt.Println("No projects. Run 'segments projects add <name>' to create one.")
+		fmt.Println("No projects yet.")
 		return nil
 	}
 
 	fmt.Println()
-	fmt.Println(bold.Render("Projects: ") + cyan.Render(fmt.Sprintf("%d", len(projects))))
+	fmt.Println(bold.Render("Projects: ") + cyan.Render(strconv.Itoa(len(projects))))
 	for _, p := range projects {
 		tasks, _ := s.ListTasks(p.ID)
 		var done int
@@ -302,41 +281,34 @@ func runList(s *store.Store, args []string) error {
 				done++
 			}
 		}
-		var st string
+		progress := fmt.Sprintf("%d/%d", done, len(tasks))
+		color := yellow
 		if done == len(tasks) {
-			st = green.Render(fmt.Sprintf("%d/%d", done, len(tasks))) + dim.Render(" done")
-		} else {
-			st = yellow.Render(fmt.Sprintf("%d/%d", done, len(tasks))) + dim.Render(" done")
+			color = green
 		}
-		fmt.Printf("  %s %s (%s)\n", cyan.Render(p.ID[:8]), bold.Render(p.Name), st)
+		fmt.Printf("  %s %s (%s%s)\n", cyan.Render(p.ID[:8]), bold.Render(p.Name), color.Render(progress), dim.Render(" done"))
 	}
+	fmt.Println()
 	return nil
 }
 
 func runRemove() error {
-	var force bool
 	for _, arg := range os.Args[1:] {
 		if arg == "-f" || arg == "--force" {
-			force = true
+			return doRemove()
 		}
 	}
 
-	if !force {
-		// Try TUI, don't fall back if it errors
-		conf := runRemoveTUI()
-		if !conf { return }
+	if !confirm("Uninstall Segments?", "Removes all projects, tasks, server, and shell alias.") {
+		fmt.Println("Cancelled.")
+		return nil
 	}
-
-	return runRemoveImpl()
+	return doRemove()
 }
 
-
-func runRemoveImpl() error {
-	// Stop server if running
+func doRemove() error {
 	if isRunning() {
-		pid := getPID()
-		proc, _ := os.FindProcess(pid)
-		if proc != nil {
+		if proc, err := os.FindProcess(getPID()); err == nil {
 			proc.Signal(os.Interrupt)
 		}
 	}
@@ -344,32 +316,34 @@ func runRemoveImpl() error {
 	home, _ := os.UserHomeDir()
 	os.RemoveAll(filepath.Join(home, ".segments"))
 
-	// Remove executable
-	for _, p := range []string{
-		filepath.Join(home, ".local", "bin", "segments"),
-		"/usr/local/bin/segments",
-		"/usr/bin/segments",
-	} {
-		os.Remove(p)
+	for _, p := range []string{"segments", "sg"} {
+		os.Remove(filepath.Join(home, ".local", "bin", p))
 	}
 
-	// Remove shell binding
 	for _, rc := range []string{".zshrc", ".bashrc"} {
 		path := filepath.Join(home, rc)
-		if data, err := os.ReadFile(path); err == nil {
-			lines := strings.Split(string(data), "\n")
-			var kept []string
-			for _, line := range lines {
-				if strings.Contains(line, "# segments") || strings.Contains(line, "sg() { segments") {
-					continue
-				}
-				kept = append(kept, line)
-			}
-			os.WriteFile(path, []byte(strings.Join(kept, "\n")), 0644)
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
 		}
+		var kept []string
+		for _, line := range strings.Split(string(data), "\n") {
+			if strings.Contains(line, "# segments") {
+				continue
+			}
+			kept = append(kept, line)
+		}
+		os.WriteFile(path, []byte(strings.Join(kept, "\n")), 0644)
 	}
 
-	fmt.Println("Segments removed completely.")
+	cwd, _ := os.Getwd()
+	os.Remove(filepath.Join(cwd, ".pi", "extensions", "segments.ts"))
+	removeOpenCodeMCP(cwd)
+	removeMCPEntry(filepath.Join(cwd, ".mcp.json"))
+
+	fmt.Println("Segments removed.")
+	fmt.Println(dim.Render("Run: ") + cyan.Render("hash -r") + dim.Render(" to clear shell cache"))
+	fmt.Println()
 	return nil
 }
 
@@ -382,63 +356,8 @@ func runInit(s *store.Store) error {
 	return os.WriteFile(filepath.Join(dataDir, "config.yaml"), data, 0644)
 }
 
-func runProjects(s *store.Store, args []string) error {
-	if len(args) == 0 {
-		list, err := s.ListProjects()
-		if err != nil {
-			return err
-		}
-		for _, p := range list {
-			fmt.Printf("%s %s\n", p.ID, p.Name)
-		}
-		return nil
-	}
-
-	switch args[0] {
-	case "add":
-		if len(args) < 2 {
-			return fmt.Errorf("usage: segments projects add <name>")
-		}
-		p, err := s.CreateProject(args[1])
-		if err != nil {
-			return err
-		}
-		fmt.Println(p.ID)
-		notifyServer()
-		return nil
-	case "rm":
-		if len(args) < 2 {
-			return fmt.Errorf("usage: segments projects rm <id>")
-		}
-		if err := s.DeleteProject(args[1]); err != nil {
-			return err
-		}
-		notifyServer()
-		return nil
-	default:
-		return fmt.Errorf("unknown projects command: %s", args[0])
-	}
-}
-
-func runTasks(s *store.Store, args []string) error {
-	if len(args) < 1 {
-		return fmt.Errorf("usage: segments tasks <project-id>")
-	}
-	projectID := args[0]
-	list, err := s.ListTasks(projectID)
-	if err != nil {
-		return err
-	}
-	for _, t := range list {
-		status := string(t.Status)
-		fmt.Printf("%s [%s] %s (P%d)\n", t.ID, status, t.Title, t.Priority)
-	}
-	return nil
-}
-
 func runAdd(s *store.Store, args []string) error {
 	var projectID, title, body string
-	var priority int
 
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
@@ -461,10 +380,10 @@ func runAdd(s *store.Store, args []string) error {
 		return fmt.Errorf("title required")
 	}
 	if projectID == "" {
-		return fmt.Errorf("project id required (use -p)")
+		return fmt.Errorf("project id required (-p)")
 	}
 
-	t, err := s.CreateTask(projectID, title, body, priority)
+	t, err := s.CreateTask(projectID, title, body, 0)
 	if err != nil {
 		return err
 	}
@@ -473,9 +392,35 @@ func runAdd(s *store.Store, args []string) error {
 	return nil
 }
 
+func runClose(s *store.Store, args []string) error {
+	if len(args) < 2 {
+		return fmt.Errorf("usage: sg close <project-id> <task-id>")
+	}
+	t, err := s.UpdateTask(args[0], args[1], "", "", models.StatusClosed, 0, "")
+	if err != nil {
+		return err
+	}
+	fmt.Println(t.ID)
+	notifyServer()
+	return nil
+}
+
+func runRename(s *store.Store, args []string) error {
+	if len(args) < 2 {
+		return fmt.Errorf("usage: sg rename <project-id> <new-name>")
+	}
+	p, err := s.UpdateProject(args[0], strings.Join(args[1:], " "))
+	if err != nil {
+		return err
+	}
+	fmt.Println(p.ID + " " + p.Name)
+	notifyServer()
+	return nil
+}
+
 func runDone(s *store.Store, args []string) error {
 	if len(args) < 2 {
-		return fmt.Errorf("usage: segments done <project-id> <task-id>")
+		return fmt.Errorf("usage: sg done <project-id> <task-id>")
 	}
 	t, err := s.UpdateTask(args[0], args[1], "", "", models.StatusDone, 0, "")
 	if err != nil {
@@ -486,168 +431,8 @@ func runDone(s *store.Store, args []string) error {
 	return nil
 }
 
-func runUpdate(s *store.Store, args []string) error {
-	if len(args) < 3 {
-		return fmt.Errorf("usage: segments update <project-id> <task-id> <title>")
-	}
-	t, err := s.UpdateTask(args[0], args[1], args[2], "", models.StatusTodo, 0, "")
-	if err != nil {
-		return err
-	}
-	fmt.Println(t.ID)
-	notifyServer()
-	return nil
-}
-
-func runRm(s *store.Store, args []string) error {
-	if len(args) < 2 {
-		return fmt.Errorf("usage: segments rm <project-id> <task-id>")
-	}
-	if err := s.DeleteTask(args[0], args[1]); err != nil {
-		return err
-	}
-	notifyServer()
-	return nil
-}
-
-func runStatus(s *store.Store) error {
-	projects, err := s.ListProjects()
-	if err != nil {
-		return err
-	}
-	fmt.Printf("Projects: %d\n", len(projects))
-	for _, p := range projects {
-		tasks, err := s.ListTasks(p.ID)
-		if err != nil {
-			continue
-		}
-		var done int
-		for _, t := range tasks {
-			if t.Status == models.StatusDone {
-				done++
-			}
-		}
-		fmt.Printf("  %s: %d/%d tasks\n", p.Name, done, len(tasks))
-	}
-	return nil
-}
-
-func runMCP(s *store.Store) error {
-	return mcpServer(s)
-}
-
-func mcpServer(s *store.Store) error {
-	dec := json.NewDecoder(os.Stdin)
-	enc := json.NewEncoder(os.Stdout)
-
-	for {
-		var req map[string]interface{}
-		if err := dec.Decode(&req); err != nil {
-			if err == io.EOF {
-				return nil
-			}
-			return err
-		}
-
-		resp := handleMCP(s, req)
-		enc.Encode(resp)
-	}
-}
-
-func handleMCP(s *store.Store, req map[string]interface{}) map[string]interface{} {
-	method, _ := req["method"].(string)
-	id, _ := req["id"]
-
-	resp := map[string]interface{}{
-		"jsonrpc": "2.0",
-		"id":     id,
-	}
-
-	switch method {
-	case "initialize":
-		resp["result"] = map[string]interface{}{
-			"protocolVersion": "2024-11-05",
-			"capabilities":    map[string]interface{}{},
-			"serverInfo":     map[string]string{"name": "segments", "version": "0.1.0"},
-		}
-	case "tools/list":
-		resp["result"] = map[string]interface{}{
-			"tools": []map[string]interface{}{
-				{"name": "segments_list_projects", "description": "List all projects"},
-				{"name": "segments_create_project", "description": "Create a project"},
-				{"name": "segments_list_tasks", "description": "List tasks for a project"},
-				{"name": "segments_create_task", "description": "Create a task"},
-				{"name": "segments_update_task", "description": "Update a task"},
-				{"name": "segments_delete_task", "description": "Delete a task"},
-				{"name": "segments_get_task", "description": "Get a task"},
-			},
-		}
-	case "tools/call":
-		tool, _ := req["params"].(map[string]interface{})["name"].(string)
-		args, _ := req["params"].(map[string]interface{})["arguments"].(map[string]interface{})
-		result := callTool(s, tool, args)
-		resp["result"] = map[string]interface{}{
-			"content": []map[string]string{{"type": "text", "text": result}},
-		}
-	default:
-		resp["error"] = map[string]string{"code": "-32601", "message": "method not found"}
-	}
-
-	return resp
-}
-
-func callTool(s *store.Store, name string, args map[string]interface{}) string {
-	switch name {
-	case "segments_list_projects":
-		list, _ := s.ListProjects()
-		data, _ := json.Marshal(list)
-		return string(data)
-	case "segments_create_project":
-		name, _ := args["name"].(string)
-		p, _ := s.CreateProject(name)
-		data, _ := json.Marshal(p)
-		notifyServer()
-		return string(data)
-	case "segments_list_tasks":
-		projectID, _ := args["project_id"].(string)
-		list, _ := s.ListTasks(projectID)
-		data, _ := json.Marshal(list)
-		return string(data)
-	case "segments_create_task":
-		projectID, _ := args["project_id"].(string)
-		title, _ := args["title"].(string)
-		t, _ := s.CreateTask(projectID, title, "", 0)
-		data, _ := json.Marshal(t)
-		notifyServer()
-		return string(data)
-	case "segments_update_task":
-		projectID, _ := args["project_id"].(string)
-		taskID, _ := args["task_id"].(string)
-		title, _ := args["title"].(string)
-		t, _ := s.UpdateTask(projectID, taskID, title, "", models.StatusTodo, 0, "")
-		data, _ := json.Marshal(t)
-		notifyServer()
-		return string(data)
-	case "segments_delete_task":
-		projectID, _ := args["project_id"].(string)
-		taskID, _ := args["task_id"].(string)
-		s.DeleteTask(projectID, taskID)
-		notifyServer()
-		return `{"deleted": true}`
-	case "segments_get_task":
-		projectID, _ := args["project_id"].(string)
-		taskID, _ := args["task_id"].(string)
-		t, _ := s.GetTask(projectID, taskID)
-		data, _ := json.Marshal(t)
-		return string(data)
-	default:
-		return `{"error": "unknown tool"}`
-	}
-}
-
 func runBeads(s *store.Store, args []string) error {
-	var beadsDir string
-	var projectName string
+	var beadsDir, projectName string
 
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
@@ -665,23 +450,21 @@ func runBeads(s *store.Store, args []string) error {
 	}
 
 	if beadsDir == "" {
-		home, _ := os.UserHomeDir()
-		beadsDir = filepath.Join(home, "Dev", "segments", ".beads")
+		cwd, _ := os.Getwd()
+		beadsDir = filepath.Join(cwd, ".beads")
+	}
+	if projectName == "" {
+		projectName = filepath.Base(filepath.Dir(beadsDir))
 	}
 
-	issuesFile := filepath.Join(beadsDir, "issues.jsonl")
-	data, err := os.ReadFile(issuesFile)
+	data, err := os.ReadFile(filepath.Join(beadsDir, "issues.jsonl"))
 	if err != nil {
 		return fmt.Errorf("read issues.jsonl: %w", err)
 	}
 
-	var proj *models.Project
-	if projectName == "" {
-		projectName = "Beads Import"
-	}
-	proj, err = s.CreateProject(projectName)
+	proj, err := s.CreateProject(projectName)
 	if err != nil {
-		return fmt.Errorf("create project: %w", err)
+		return err
 	}
 	fmt.Printf("Created project: %s %s\n", proj.ID, proj.Name)
 
@@ -699,15 +482,12 @@ func runBeads(s *store.Store, args []string) error {
 			Priority    int      `json:"priority"`
 			IssueType   string   `json:"issue_type"`
 			Labels      []string `json:"labels"`
-			CreatedAt   string   `json:"created_at"`
-			ClosedAt    string   `json:"closed_at"`
 			CloseReason string   `json:"close_reason"`
 		}
 		if err := json.Unmarshal([]byte(line), &bead); err != nil {
 			skipped++
 			continue
 		}
-
 		if bead.IssueType != "task" {
 			skipped++
 			continue
@@ -722,78 +502,329 @@ func runBeads(s *store.Store, args []string) error {
 		}
 		body += "\n\n[Imported from bead: " + bead.ID + "]"
 
-		var status models.TaskStatus
-		switch bead.Status {
-		case "open", "":
-			status = models.StatusTodo
-		case "in_progress":
-			status = models.StatusInProgress
-		case "closed":
-			status = models.StatusDone
-		case "blocker":
-			status = models.StatusBlocker
-		default:
-			status = models.StatusTodo
-		}
-
 		_, err = s.CreateTask(proj.ID, bead.Title, body, bead.Priority)
 		if err != nil {
 			skipped++
 			continue
 		}
 
-		if status == models.StatusDone {
+		if bead.Status == "closed" {
 			tasks, _ := s.ListTasks(proj.ID)
 			if len(tasks) > 0 {
 				last := tasks[len(tasks)-1]
-				s.UpdateTask(proj.ID, last.ID, "", "", models.StatusDone, 0, "")
+				s.UpdateTask(proj.ID, last.ID, "", "", models.StatusClosed, 0, "")
 			}
 		}
 
 		imported++
 	}
 
-
-	fmt.Println(bold.Render("Imported ") + green.Render(fmt.Sprintf("%d", imported)) + dim.Render(" tasks (") + yellow.Render(fmt.Sprintf("%d", skipped)) + dim.Render(" skipped)"))
+	fmt.Println(bold.Render("Imported ") + green.Render(strconv.Itoa(imported)) + dim.Render(" tasks (") + yellow.Render(strconv.Itoa(skipped)) + dim.Render(" skipped)"))
 	notifyServer()
 	return nil
 }
 
 func runShell() error {
 	fmt.Println()
-	fmt.Println(bold.Render("# Add sg alias to .zshrc or .bashrc:"))
-	fmt.Println(dim.Render("sg() { segments \"$@\"; }"))
+	fmt.Println(bold.Render("Commands"))
+	fmt.Println("  " + cyan.Render("sg start") + dim.Render("      start the server"))
+	fmt.Println("  " + cyan.Render("sg stop") + dim.Render("       stop the server"))
+	fmt.Println("  " + cyan.Render("sg list") + dim.Render("       list projects"))
+	fmt.Println("  " + cyan.Render("sg setup") + dim.Render("      configure integrations"))
+	fmt.Println("  " + cyan.Render("sg uninstall") + dim.Render("  remove everything"))
 	fmt.Println()
-	fmt.Println(bold.Render("# Commands: ") + cyan.Render("sg start") + dim.Render(" | ") + cyan.Render("sg stop") + dim.Render(" | ") + cyan.Render("sg list") + dim.Render(" | ") + cyan.Render("sg uninstall"))
 	return nil
 }
 
-func runSetup() error {
+func runSetup(s *store.Store) error {
 	cwd, _ := os.Getwd()
+	home, _ := os.UserHomeDir()
+	bin := filepath.Join(home, ".local", "bin", "segments")
+
 	fmt.Println()
-	fmt.Println(bold.Render("=== Segments Setup ==="))
-	fmt.Println("")
+	fmt.Println(bold.Render("Segments Setup"))
+	fmt.Println()
 
-	var beads, mcp, pi bool
+	type integration struct {
+		name      string
+		detect    func() bool
+		installed func() bool
+		setup     func() error
+		prompt    string
+		detail    string
+	}
 
-	if _, err := os.Stat(filepath.Join(cwd, ".beads", "issues.jsonl")); err == nil {
-		fmt.Println(" " + green.Render("✓") + " Beads: " + dim.Render(".beads/issues.jsonl") + yellow.Render(" (import pending)"))
-		beads = true
+	integrations := []integration{
+		{
+			name:      "Pi",
+			detect:    func() bool { return fileExists(filepath.Join(cwd, ".pi")) },
+			installed: func() bool { return fileExists(filepath.Join(cwd, ".pi", "extensions", "segments.ts")) },
+			setup: func() error {
+				dir := filepath.Join(cwd, ".pi", "extensions")
+				os.MkdirAll(dir, 0755)
+				return os.WriteFile(filepath.Join(dir, "segments.ts"), []byte(piExtensionTS), 0644)
+			},
+			prompt: "Set up Pi extension?",
+			detail: "Creates .pi/extensions/segments.ts for task management",
+		},
+		{
+			name:      "Claude Code",
+			detect:    func() bool { _, err := exec.LookPath("claude"); return err == nil },
+			installed: func() bool { return mcpConfigured(filepath.Join(cwd, ".mcp.json")) },
+			setup:     func() error { return writeMCPConfig(filepath.Join(cwd, ".mcp.json"), bin) },
+			prompt:    "Set up Claude Code MCP?",
+			detail:    "Creates .mcp.json with segments server config",
+		},
+		{
+			name:      "OpenCode",
+			detect:    func() bool { return fileExists(filepath.Join(cwd, "opencode.json")) },
+			installed: func() bool { return mcpConfigured(filepath.Join(cwd, "opencode.json")) },
+			setup:     func() error { return setupOpenCodeMCP(cwd, bin) },
+			prompt:    "Set up OpenCode MCP?",
+			detail:    "Adds segments MCP server to opencode.json",
+		},
+		{
+			name:   "Beads",
+			detect: func() bool { return fileExists(filepath.Join(cwd, ".beads", "issues.jsonl")) },
+			setup: func() error { return runBeads(s, nil) },
+			prompt: "Import Beads issues?",
+			detail: "Creates a project with tasks from .beads/issues.jsonl",
+		},
 	}
-	if _, err := os.Stat(filepath.Join(cwd, "opencode.json")); err == nil {
-		fmt.Println(" " + green.Render("✓") + " OpenCode: " + dim.Render("opencode.json") + yellow.Render(" (MCP pending)"))
-		mcp = true
+
+	any := false
+	for _, ig := range integrations {
+		if !ig.detect() {
+			continue
+		}
+		any = true
+
+		if ig.installed != nil && ig.installed() {
+			fmt.Println("  " + green.Render("*") + " " + ig.name + green.Render(" (configured)"))
+			continue
+		}
+
+		fmt.Println("  " + yellow.Render("*") + " " + ig.name)
+		if confirm(ig.prompt, ig.detail) {
+			if err := ig.setup(); err != nil {
+				fmt.Println("  " + red.Render(err.Error()))
+			} else {
+				fmt.Println("  " + green.Render("Done."))
+			}
+		}
+		fmt.Println()
 	}
-	if _, err := os.Stat(filepath.Join(cwd, ".pi", "extensions")); err == nil {
-		fmt.Println(" " + green.Render("✓") + " Pi: " + dim.Render(".pi/extensions") + green.Render(" (loaded)"))
-		pi = true
+
+	if !any {
+		fmt.Println("  No supported tools detected in this directory.")
+		fmt.Println("  Supports: Pi, Claude Code, OpenCode")
 	}
-	if !beads && !mcp && !pi {
-		fmt.Println("No integrations detected. Run 'sg start' first.")
-	}
-	fmt.Println("\nServer running at http://localhost:8765")
-	fmt.Println("Run 'sg list' to see projects.")
+
+	fmt.Println()
+	fmt.Println(dim.Render("Server: ") + cyan.Render("http://localhost:8765"))
+	fmt.Println()
 	return nil
+}
+
+func mcpEntry(bin string) map[string]interface{} {
+	return map[string]interface{}{
+		"command": bin,
+		"args":    []string{"mcp"},
+	}
+}
+
+func mcpConfigured(path string) bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	var cfg map[string]interface{}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return false
+	}
+	servers, _ := cfg["mcpServers"].(map[string]interface{})
+	_, ok := servers["segments"]
+	return ok
+}
+
+func writeMCPConfig(path, bin string) error {
+	cfg := map[string]interface{}{}
+	if data, err := os.ReadFile(path); err == nil {
+		json.Unmarshal(data, &cfg)
+	}
+	servers, _ := cfg["mcpServers"].(map[string]interface{})
+	if servers == nil {
+		servers = map[string]interface{}{}
+	}
+	servers["segments"] = mcpEntry(bin)
+	cfg["mcpServers"] = servers
+	out, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, append(out, '\n'), 0644)
+}
+
+func setupOpenCodeMCP(cwd, bin string) error {
+	path := filepath.Join(cwd, "opencode.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+
+	var cfg map[string]interface{}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return err
+	}
+
+	servers, _ := cfg["mcpServers"].(map[string]interface{})
+	if servers == nil {
+		servers = map[string]interface{}{}
+	}
+	servers["segments"] = mcpEntry(bin)
+	cfg["mcpServers"] = servers
+
+	out, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, append(out, '\n'), 0644)
+}
+
+func removeMCPEntry(path string) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+
+	var cfg map[string]interface{}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return
+	}
+
+	servers, _ := cfg["mcpServers"].(map[string]interface{})
+	if servers == nil {
+		return
+	}
+	delete(servers, "segments")
+	if len(servers) == 0 {
+		delete(cfg, "mcpServers")
+	} else {
+		cfg["mcpServers"] = servers
+	}
+
+	out, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return
+	}
+	os.WriteFile(path, append(out, '\n'), 0644)
+}
+
+func removeOpenCodeMCP(cwd string) {
+	removeMCPEntry(filepath.Join(cwd, "opencode.json"))
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+func mcpServer(s *store.Store) error {
+	dec := json.NewDecoder(os.Stdin)
+	enc := json.NewEncoder(os.Stdout)
+
+	for {
+		var req map[string]interface{}
+		if err := dec.Decode(&req); err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			return err
+		}
+		enc.Encode(handleMCP(s, req))
+	}
+}
+
+func handleMCP(s *store.Store, req map[string]interface{}) map[string]interface{} {
+	method, _ := req["method"].(string)
+	id := req["id"]
+
+	resp := map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      id,
+	}
+
+	switch method {
+	case "initialize":
+		resp["result"] = map[string]interface{}{
+			"protocolVersion": "2024-11-05",
+			"capabilities":    map[string]interface{}{},
+			"serverInfo":      map[string]string{"name": "segments", "version": "0.1.0"},
+		}
+	case "tools/list":
+		resp["result"] = map[string]interface{}{
+			"tools": []map[string]interface{}{
+				{"name": "segments_list_projects", "description": "List all projects"},
+				{"name": "segments_create_project", "description": "Create a project"},
+				{"name": "segments_rename_project", "description": "Rename a project"},
+				{"name": "segments_list_tasks", "description": "List tasks for a project"},
+				{"name": "segments_create_task", "description": "Create a task"},
+				{"name": "segments_update_task", "description": "Update a task"},
+				{"name": "segments_delete_task", "description": "Delete a task"},
+				{"name": "segments_get_task", "description": "Get a task"},
+			},
+		}
+	case "tools/call":
+		params, _ := req["params"].(map[string]interface{})
+		tool, _ := params["name"].(string)
+		args, _ := params["arguments"].(map[string]interface{})
+		resp["result"] = map[string]interface{}{
+			"content": []map[string]string{{"type": "text", "text": callTool(s, tool, args)}},
+		}
+	default:
+		resp["error"] = map[string]string{"code": "-32601", "message": "method not found"}
+	}
+
+	return resp
+}
+
+func callTool(s *store.Store, tool string, args map[string]interface{}) string {
+	str := func(key string) string { v, _ := args[key].(string); return v }
+	marshal := func(v interface{}) string { d, _ := json.Marshal(v); return string(d) }
+
+	switch tool {
+	case "segments_list_projects":
+		list, _ := s.ListProjects()
+		return marshal(list)
+	case "segments_create_project":
+		p, _ := s.CreateProject(str("name"))
+		notifyServer()
+		return marshal(p)
+	case "segments_rename_project":
+		p, _ := s.UpdateProject(str("project_id"), str("name"))
+		notifyServer()
+		return marshal(p)
+	case "segments_list_tasks":
+		list, _ := s.ListTasks(str("project_id"))
+		return marshal(list)
+	case "segments_create_task":
+		t, _ := s.CreateTask(str("project_id"), str("title"), "", 0)
+		notifyServer()
+		return marshal(t)
+	case "segments_update_task":
+		t, _ := s.UpdateTask(str("project_id"), str("task_id"), str("title"), "", models.StatusTodo, 0, "")
+		notifyServer()
+		return marshal(t)
+	case "segments_delete_task":
+		s.DeleteTask(str("project_id"), str("task_id"))
+		notifyServer()
+		return `{"deleted": true}`
+	case "segments_get_task":
+		t, _ := s.GetTask(str("project_id"), str("task_id"))
+		return marshal(t)
+	default:
+		return `{"error": "unknown tool"}`
+	}
 }
 
 func expandPath(path string) string {
