@@ -5,6 +5,7 @@ LDFLAGS = -ldflags "-X main.version=$(VERSION)"
 .PHONY: build install clean
 
 build:
+	cp web/index.html internal/server/index.html
 	CGO_ENABLED=1 go build $(LDFLAGS) -o $(BINARY) ./cmd/segments/
 
 install: build
