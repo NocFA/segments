@@ -32,19 +32,24 @@ detect_platform() {
 
 latest_release() {
   curl -fsSL "${GITEA}/api/v1/repos/${REPO}/releases/latest" 2>/dev/null \
-    | grep '"tag_name"' \
-    | sed 's/.*"tag_name": *"\(.*\)".*/\1/'
+    | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['tag_name'])" 2>/dev/null
 }
 
 install_from_release() {
   local platform="$1"
   local version
   version=$(latest_release)
-  [ -z "$version" ] && return 1
+  if [ -z "$version" ]; then
+    info "No release found, building from source..."
+    return 1
+  fi
 
   local url="${GITEA}/${REPO}/releases/download/${version}/segments-${platform}"
   info "Downloading segments ${version} for ${platform}..."
-  curl -fsSL "$url" -o /tmp/segments || return 1
+  if ! curl -fsSL "$url" -o /tmp/segments; then
+    info "No binary for ${platform} in ${version}, building from source..."
+    return 1
+  fi
   chmod +x /tmp/segments
   mkdir -p "$INSTALL_DIR"
   mv /tmp/segments "${INSTALL_DIR}/segments"
@@ -82,7 +87,6 @@ main() {
   platform=$(detect_platform)
 
   if ! install_from_release "$platform"; then
-    info "No release binary found, building from source..."
     install_from_source
   fi
 
