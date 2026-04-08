@@ -1,23 +1,21 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 
-const BASE_URL = "http://localhost:8765";
+const BASE_URL = process.env.SEGMENTS_URL || "http://localhost:8765";
 
-async function request(path: string, method = "GET", body?: object): Promise<any> {
-  try {
-    const args = ["-s", "-X", method];
+export default function (pi: ExtensionAPI) {
+  async function request(path: string, method = "GET", body?: object): Promise<any> {
+    const args = ["-s", "-f", "-X", method];
     if (body) {
       args.push("-H", "Content-Type: application/json", "-d", JSON.stringify(body));
     }
     args.push(BASE_URL + path);
-    const out = await pi.exec("curl", args);
-    return JSON.parse(out as string);
-  } catch {
-    throw new Error("Server not running at " + BASE_URL);
+    const result = await pi.exec("curl", args);
+    if (result.code !== 0) {
+      throw new Error("Server not running at " + BASE_URL);
+    }
+    return JSON.parse(result.stdout);
   }
-}
-
-export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "seg_tasks",
     description: "List tasks for a project",
@@ -86,22 +84,30 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  pi.registerCommand({
-    name: "seg",
+  pi.registerCommand("seg", {
     description: "Show Segments status",
-    handler: async () => {
+    handler: async (args: string, ctx: any) => {
       try {
         const projects = await request("/api/projects") as any[];
-        if (!projects.length) return "No projects";
+        if (!projects.length) {
+          ctx.ui.notify("No projects. Use sg add -p <id> <title> to create tasks.", "info");
+          return;
+        }
         let out = `Projects: ${projects.length}\n`;
         for (const p of projects) {
           const tasks = await request(`/api/projects/${p.id}/tasks`) as any[];
           const done = tasks.filter(t => t.status === "done").length;
           out += `  ${p.name}: ${done}/${tasks.length} done\n`;
         }
-        return out;
+        ctx.ui.notify(out, "info");
       } catch (e) {
-        return `Error: ${e}`;
+        // Server not running — fall back to CLI
+        try {
+          const out = await pi.exec("sg", ["list"]);
+          ctx.ui.notify(String(out).trim() || "No projects yet.", "info");
+        } catch {
+          ctx.ui.notify("Segments not available. Run: sg start", "error");
+        }
       }
     },
   });

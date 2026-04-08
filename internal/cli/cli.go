@@ -82,14 +82,18 @@ func pidFileData() (int, string, error) {
 }
 
 func notifyServer() {
-	pid, port, err := pidFileData()
+	pid, addr, err := pidFileData()
 	if err != nil {
 		return
 	}
 	if p, err := os.FindProcess(pid); err != nil || p.Pid != pid {
 		return
 	}
-	http.Post("http://localhost:"+port+"/internal/sync", "application/json", bytes.NewReader(nil))
+	// addr is either "host:port" or just a port (legacy pid files)
+	if !strings.Contains(addr, ":") {
+		addr = "127.0.0.1:" + addr
+	}
+	http.Post("http://"+addr+"/internal/sync", "application/json", bytes.NewReader(nil))
 }
 
 // aliases maps user-facing command names to internal ones.
@@ -100,12 +104,13 @@ var aliases = map[string]string{
 	"remove":    "remove",
 	"list":      "list",
 	"status":    "list",
+	"install":   "setup",
 }
 
 func Run(args []string, version string) error {
 	if len(args) < 2 {
 		fmt.Println("usage: segments <command>")
-		fmt.Println("  start, stop, list, add, done, rename, setup, shell, uninstall")
+		fmt.Println("  start, stop, list, add, done, rename, setup, init, shell, uninstall")
 		return nil
 	}
 
@@ -162,7 +167,7 @@ func runServe(s *store.Store) error {
 		return fmt.Errorf("already running (pid: %d)", getPID())
 	}
 
-	server.LoadConfig(filepath.Join(dataDir, "config.yaml"))
+	cfg, _ := server.LoadConfig(filepath.Join(dataDir, "config.yaml"))
 	autoDetectIntegrations()
 
 	cmd := exec.Command(os.Args[0], "serve")
@@ -177,8 +182,10 @@ func runServe(s *store.Store) error {
 		return fmt.Errorf("start daemon: %w", err)
 	}
 
+	listenAddr := cfg.Bind + ":" + cfg.Port
 	fmt.Println()
 	fmt.Println(bold.Render("Segments started ") + green.Render("(pid: "+strconv.Itoa(cmd.Process.Pid)+")"))
+	fmt.Println(dim.Render("  Listening: ") + cyan.Render("http://"+listenAddr))
 	fmt.Println(bold.Render("Run: ") + cyan.Render("sg list") + dim.Render(" | sg shell"))
 	fmt.Println()
 	return nil
@@ -337,9 +344,13 @@ func doRemove() error {
 	}
 
 	cwd, _ := os.Getwd()
+	// Clean local integrations
 	os.Remove(filepath.Join(cwd, ".pi", "extensions", "segments.ts"))
 	removeOpenCodeMCP(cwd)
 	removeMCPEntry(filepath.Join(cwd, ".mcp.json"))
+	// Clean global integrations
+	os.Remove(filepath.Join(home, ".pi", "agent", "extensions", "segments.ts"))
+	removeMCPEntry(filepath.Join(home, ".claude", "mcp.json"))
 
 	fmt.Println("Segments removed.")
 	fmt.Println(dim.Render("Run: ") + cyan.Render("hash -r") + dim.Render(" to clear shell cache"))
@@ -347,13 +358,44 @@ func doRemove() error {
 	return nil
 }
 
-func runInit(s *store.Store) error {
+func ensureDataDir() error {
 	if err := os.MkdirAll(expandPath(dataDir), 0755); err != nil {
 		return err
 	}
-	cfg := server.Config{Port: "8765", DataDir: "~/.segments"}
-	data, _ := json.MarshalIndent(cfg, "", "  ")
-	return os.WriteFile(filepath.Join(dataDir, "config.yaml"), data, 0644)
+	cfgPath := filepath.Join(dataDir, "config.yaml")
+	if !fileExists(cfgPath) {
+		yamlData := []byte("port: \"8765\"\nbind: \"127.0.0.1\"\ndata_dir: \"~/.segments\"\n")
+		return os.WriteFile(cfgPath, yamlData, 0644)
+	}
+	return nil
+}
+
+// runInit sets up local (per-project) integrations in the current directory.
+// When called non-interactively (e.g. from install script), it only ensures
+// the data directory and config exist.
+func runInit(s *store.Store) error {
+	if err := ensureDataDir(); err != nil {
+		return err
+	}
+
+	// Non-interactive: just ensure data dir exists (install script calls this)
+	if !isTerminal() {
+		return nil
+	}
+
+	cwd, _ := os.Getwd()
+	home, _ := os.UserHomeDir()
+	bin := filepath.Join(home, ".local", "bin", "segments")
+
+	fmt.Println()
+	fmt.Println(bold.Render("Segments Init") + dim.Render(" (local project setup)"))
+	fmt.Println(dim.Render("  Directory: ") + cyan.Render(cwd))
+	fmt.Println()
+
+	setupIntegrations(s, scopeLocal, cwd, home, bin)
+
+	fmt.Println()
+	return nil
 }
 
 func runAdd(s *store.Store, args []string) error {
@@ -530,13 +572,222 @@ func runShell() error {
 	fmt.Println("  " + cyan.Render("sg start") + dim.Render("      start the server"))
 	fmt.Println("  " + cyan.Render("sg stop") + dim.Render("       stop the server"))
 	fmt.Println("  " + cyan.Render("sg list") + dim.Render("       list projects"))
-	fmt.Println("  " + cyan.Render("sg setup") + dim.Render("      configure integrations"))
+	fmt.Println("  " + cyan.Render("sg setup") + dim.Render("      configure integrations (global/local)"))
+	fmt.Println("  " + cyan.Render("sg init") + dim.Render("       add integrations to current project"))
 	fmt.Println("  " + cyan.Render("sg uninstall") + dim.Render("  remove everything"))
 	fmt.Println()
 	return nil
 }
 
+type installScope string
+
+const (
+	scopeGlobal installScope = "global"
+	scopeLocal  installScope = "local"
+)
+
+type integration struct {
+	name    string
+	scope   installScope // which scope this integration applies to
+	detect  func() bool
+	path    func() string // returns the target file path
+	content func() string // returns expected content (empty for non-file integrations)
+	setup   func() error
+	prompt  string
+	detail  string
+}
+
+// integrationStatus returns the status of an integration:
+// "missing" - not installed, "current" - installed and up to date, "outdated" - installed but content differs
+func integrationStatus(ig integration) string {
+	p := ig.path()
+	if p == "" || !fileExists(p) {
+		return "missing"
+	}
+	expected := ig.content()
+	if expected == "" {
+		// MCP configs and non-file integrations: check if segments key exists in JSON
+		if strings.HasSuffix(p, ".json") {
+			if mcpConfigured(p) {
+				return "current"
+			}
+			return "missing"
+		}
+		// Non-JSON (e.g. beads) - file exists means configured
+		return "current"
+	}
+	data, err := os.ReadFile(p)
+	if err != nil {
+		return "missing"
+	}
+	if string(data) == expected {
+		return "current"
+	}
+	return "outdated"
+}
+
+func buildIntegrations(s *store.Store, scope installScope, cwd, home, bin string) []integration {
+	var igs []integration
+
+	// Pi extension
+	if findInPath("pi") != "" {
+		var piDir string
+		if scope == scopeGlobal {
+			piDir = filepath.Join(home, ".pi", "agent", "extensions")
+		} else {
+			piDir = filepath.Join(cwd, ".pi", "extensions")
+		}
+		piPath := filepath.Join(piDir, "segments.ts")
+		igs = append(igs, integration{
+			name:    "Pi",
+			scope:   scope,
+			detect:  func() bool { return true },
+			path:    func() string { return piPath },
+			content: func() string { return piExtensionTS },
+			setup: func() error {
+				os.MkdirAll(piDir, 0755)
+				return os.WriteFile(piPath, []byte(piExtensionTS), 0644)
+			},
+			prompt: "Set up Pi extension?",
+			detail: fmt.Sprintf("Writes segments.ts to %s", piDir),
+		})
+	}
+
+	// Claude Code MCP
+	if _, err := exec.LookPath("claude"); err == nil {
+		var mcpPath string
+		if scope == scopeGlobal {
+			mcpPath = filepath.Join(home, ".claude", "mcp.json")
+		} else {
+			mcpPath = filepath.Join(cwd, ".mcp.json")
+		}
+		igs = append(igs, integration{
+			name:   "Claude Code",
+			scope:  scope,
+			detect: func() bool { return true },
+			path:   func() string { return mcpPath },
+			content: func() string {
+				// MCP config is JSON-merged, just check if key exists
+				return ""
+			},
+			setup:  func() error { return writeMCPConfig(mcpPath, bin) },
+			prompt: "Set up Claude Code MCP?",
+			detail: fmt.Sprintf("Adds segments to %s", mcpPath),
+		})
+	}
+
+	// OpenCode MCP
+	if findInPath("opencode") != "" {
+		var ocPath string
+		if scope == scopeLocal {
+			ocPath = filepath.Join(cwd, "opencode.json")
+		} else {
+			// Check known global locations
+			for _, p := range []string{
+				filepath.Join(home, ".opencode", "opencode.json"),
+				filepath.Join(home, "Library", "Application Support", "opencode", "opencode.json"),
+			} {
+				if fileExists(p) {
+					ocPath = p
+					break
+				}
+			}
+			if ocPath == "" {
+				ocPath = filepath.Join(home, ".opencode", "opencode.json")
+			}
+		}
+		igs = append(igs, integration{
+			name:    "OpenCode",
+			scope:   scope,
+			detect:  func() bool { return true },
+			path:    func() string { return ocPath },
+			content: func() string { return "" },
+			setup: func() error {
+				os.MkdirAll(filepath.Dir(ocPath), 0755)
+				return writeMCPConfig(ocPath, bin)
+			},
+			prompt: "Set up OpenCode MCP?",
+			detail: fmt.Sprintf("Adds segments to %s", ocPath),
+		})
+	}
+
+	// Beads import (only for local scope, and only if .beads exists)
+	if scope == scopeLocal && fileExists(filepath.Join(cwd, ".beads", "issues.jsonl")) {
+		igs = append(igs, integration{
+			name:   "Beads",
+			scope:  scopeLocal,
+			detect: func() bool { return true },
+			path: func() string {
+				// Check if we already imported by looking for a project
+				// named after this directory
+				projects, _ := s.ListProjects()
+				dirName := filepath.Base(cwd)
+				for _, p := range projects {
+					if p.Name == dirName {
+						return filepath.Join(cwd, ".beads", "issues.jsonl") // exists = "current"
+					}
+				}
+				return "" // empty = "missing"
+			},
+			content: func() string { return "" },
+			setup:  func() error { return runBeads(s, nil) },
+			prompt: "Import Beads issues?",
+			detail: "Creates a project with tasks from .beads/issues.jsonl",
+		})
+	}
+
+	return igs
+}
+
+func setupIntegrations(s *store.Store, scope installScope, cwd, home, bin string) {
+	igs := buildIntegrations(s, scope, cwd, home, bin)
+
+	any := false
+	for _, ig := range igs {
+		if !ig.detect() {
+			continue
+		}
+		any = true
+
+		status := integrationStatus(ig)
+		switch status {
+		case "current":
+			fmt.Println("  " + green.Render("✓") + " " + ig.name + green.Render(" (up to date)"))
+			continue
+		case "outdated":
+			fmt.Println("  " + yellow.Render("↑") + " " + ig.name + yellow.Render(" (update available)"))
+			if confirm("Update existing "+ig.name+" integration?", ig.detail) {
+				if err := ig.setup(); err != nil {
+					fmt.Println("    " + red.Render(err.Error()))
+				} else {
+					fmt.Println("    " + green.Render("Updated."))
+				}
+			}
+			fmt.Println()
+		case "missing":
+			fmt.Println("  " + yellow.Render("○") + " " + ig.name)
+			if confirm(ig.prompt, ig.detail) {
+				if err := ig.setup(); err != nil {
+					fmt.Println("    " + red.Render(err.Error()))
+				} else {
+					fmt.Println("    " + green.Render("Done."))
+				}
+			}
+			fmt.Println()
+		}
+	}
+
+	if !any {
+		fmt.Println("  No supported tools detected.")
+		fmt.Println("  Supports: Pi, Claude Code, OpenCode")
+	}
+}
+
 func runSetup(s *store.Store) error {
+	if err := ensureDataDir(); err != nil {
+		return err
+	}
+
 	cwd, _ := os.Getwd()
 	home, _ := os.UserHomeDir()
 	bin := filepath.Join(home, ".local", "bin", "segments")
@@ -545,92 +796,38 @@ func runSetup(s *store.Store) error {
 	fmt.Println(bold.Render("Segments Setup"))
 	fmt.Println()
 
-	type integration struct {
-		name      string
-		detect    func() bool
-		installed func() bool
-		setup     func() error
-		prompt    string
-		detail    string
+	// Prompt for scope
+	idx := selectOption(
+		"Where should integrations be installed?",
+		[]string{"Global", "Local"},
+		[]string{"Machine-wide, all projects can use segments", "Only in current project directory"},
+	)
+	if idx == -1 {
+		fmt.Println("Cancelled.")
+		return nil
 	}
 
-	integrations := []integration{
-		{
-			name: "Pi",
-			detect: func() bool { return findInPath("pi") != "" },
-			installed: func() bool {
-				return fileExists(filepath.Join(home, ".pi", "extensions", "segments.ts")) ||
-					fileExists(filepath.Join(cwd, ".pi", "extensions", "segments.ts"))
-			},
-			setup: func() error {
-				dir := filepath.Join(home, ".pi", "extensions")
-				if !fileExists(dir) {
-					dir = filepath.Join(cwd, ".pi", "extensions")
-				}
-				os.MkdirAll(dir, 0755)
-				return os.WriteFile(filepath.Join(dir, "segments.ts"), []byte(piExtensionTS), 0644)
-			},
-			prompt: "Set up Pi extension?",
-			detail: "Creates segments.ts in your Pi extensions directory",
-		},
-		{
-			name:      "Claude Code",
-			detect:    func() bool { _, err := exec.LookPath("claude"); return err == nil },
-			installed: func() bool { return mcpConfigured(filepath.Join(cwd, ".mcp.json")) },
-			setup:     func() error { return writeMCPConfig(filepath.Join(cwd, ".mcp.json"), bin) },
-			prompt:    "Set up Claude Code MCP?",
-			detail:    "Creates .mcp.json with segments server config",
-		},
-		{
-			name: "OpenCode",
-			detect: func() bool { return findInPath("opencode") != "" },
-			installed: func() bool {
-				return mcpConfigured(filepath.Join(cwd, "opencode.json")) ||
-					mcpConfigured(filepath.Join(home, "Library", "Application Support", "opencode", "opencode.json"))
-			},
-			setup: func() error { return setupOpenCodeMCP(cwd, home, bin) },
-			prompt: "Set up OpenCode MCP?",
-			detail: "Adds segments MCP server to opencode.json",
-		},
-		{
-			name:   "Beads",
-			detect: func() bool { return fileExists(filepath.Join(cwd, ".beads", "issues.jsonl")) },
-			setup: func() error { return runBeads(s, nil) },
-			prompt: "Import Beads issues?",
-			detail: "Creates a project with tasks from .beads/issues.jsonl",
-		},
-	}
-
-	any := false
-	for _, ig := range integrations {
-		if !ig.detect() {
-			continue
-		}
-		any = true
-
-		if ig.installed != nil && ig.installed() {
-			fmt.Println("  " + green.Render("*") + " " + ig.name + green.Render(" (configured)"))
-			continue
-		}
-
-		fmt.Println("  " + yellow.Render("*") + " " + ig.name)
-		if confirm(ig.prompt, ig.detail) {
-			if err := ig.setup(); err != nil {
-				fmt.Println("  " + red.Render(err.Error()))
-			} else {
-				fmt.Println("  " + green.Render("Done."))
-			}
-		}
-		fmt.Println()
-	}
-
-	if !any {
-		fmt.Println("  No supported tools detected in this directory.")
-		fmt.Println("  Supports: Pi, Claude Code, OpenCode")
+	scope := scopeGlobal
+	if idx == 1 {
+		scope = scopeLocal
 	}
 
 	fmt.Println()
-	fmt.Println(dim.Render("Server: ") + cyan.Render("http://localhost:8765"))
+	if scope == scopeGlobal {
+		fmt.Println(dim.Render("  Scope: ") + cyan.Render("global"))
+	} else {
+		fmt.Println(dim.Render("  Scope: ") + cyan.Render("local") + dim.Render(" ("+cwd+")"))
+	}
+	fmt.Println()
+
+	setupIntegrations(s, scope, cwd, home, bin)
+
+	cfg, _ := server.LoadConfig(filepath.Join(dataDir, "config.yaml"))
+	listenAddr := cfg.Bind + ":" + cfg.Port
+
+	fmt.Println()
+	fmt.Println(dim.Render("Server: ") + cyan.Render("http://"+listenAddr))
+	fmt.Println(dim.Render("Tip: ") + cyan.Render("sg init") + dim.Render(" to add integrations to any project directory"))
 	fmt.Println()
 	return nil
 }

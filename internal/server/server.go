@@ -17,17 +17,19 @@ import (
 )
 
 type Config struct {
-	Port      string `yaml:"port"`
-	DataDir   string `yaml:"data_dir"`
-	LogFile   string `yaml:"log_file"`
-	EnableMCP bool   `yaml:"enable_mcp"`
-	Extension string `yaml:"extension"`
+	Port      string `yaml:"port" json:"port"`
+	Bind      string `yaml:"bind" json:"bind,omitempty"`
+	DataDir   string `yaml:"data_dir" json:"data_dir"`
+	LogFile   string `yaml:"log_file" json:"log_file,omitempty"`
+	EnableMCP bool   `yaml:"enable_mcp" json:"enable_mcp,omitempty"`
+	Extension string `yaml:"extension" json:"extension,omitempty"`
 }
 
 type Server struct {
 	store     *store.Store
 	hub       *Hub
 	addr      string
+	bind      string
 	pidFile   string
 	mux       *http.ServeMux
 	http      *http.Server
@@ -39,6 +41,7 @@ func NewServer(store *store.Store, hub *Hub, cfg *Config, pidFile string) *Serve
 		store:   store,
 		hub:     hub,
 		addr:    cfg.Port,
+		bind:    cfg.Bind,
 		pidFile: pidFile,
 		mux:     http.NewServeMux(),
 		config:  cfg,
@@ -75,7 +78,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (s *Server) Start() error {
 	addr := s.addr
 	if !strings.Contains(addr, ":") {
-		addr = ":" + addr
+		addr = s.bind + ":" + addr
 	}
 
 	s.http = &http.Server{
@@ -120,7 +123,11 @@ func (s *Server) writePIDFile() error {
 		return err
 	}
 
-	pid := fmt.Sprintf("%d\n%s\n", os.Getpid(), s.addr)
+	addr := s.addr
+	if !strings.Contains(addr, ":") {
+		addr = s.bind + ":" + addr
+	}
+	pid := fmt.Sprintf("%d\n%s\n", os.Getpid(), addr)
 	return os.WriteFile(s.pidFile, []byte(pid), 0644)
 }
 
@@ -346,6 +353,7 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	cfg := map[string]interface{}{
 		"port":      s.config.Port,
+		"bind":      s.config.Bind,
 		"data_dir":  s.config.DataDir,
 		"enable_mcp": s.config.EnableMCP,
 		"extension": s.config.Extension,
@@ -390,6 +398,7 @@ func LoadConfig(path string) (*Config, error) {
 	if err != nil {
 		return &Config{
 			Port:    "8765",
+			Bind:    "127.0.0.1",
 			DataDir: "~/.segments",
 		}, nil
 	}
@@ -401,6 +410,9 @@ func LoadConfig(path string) (*Config, error) {
 
 	if cfg.Port == "" {
 		cfg.Port = "8765"
+	}
+	if cfg.Bind == "" {
+		cfg.Bind = "127.0.0.1"
 	}
 	if cfg.DataDir == "" {
 		cfg.DataDir = "~/.segments"

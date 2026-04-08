@@ -12,7 +12,7 @@ var version = "dev"
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Println("usage: sg <command>")
-		fmt.Println("  start, stop, list, add, done, rename, setup, shell, uninstall, version")
+		fmt.Println("  start, stop, list, add, done, rename, setup, init, shell, uninstall, version")
 		os.Exit(1)
 	}
 
