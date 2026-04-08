@@ -183,19 +183,31 @@ func runServe(s *store.Store) error {
 
 func autoDetectIntegrations() {
 	cwd, _ := os.Getwd()
+	home, _ := os.UserHomeDir()
 	var found []string
 
-	piExt := filepath.Join(cwd, ".pi", "extensions")
-	if entries, err := os.ReadDir(piExt); err == nil {
-		for _, f := range entries {
-			if strings.HasPrefix(f.Name(), "segments") {
-				found = append(found, "  Pi: "+cyan.Render(f.Name()))
-				break
+	for _, dir := range []string{
+		filepath.Join(home, ".pi", "extensions"),
+		filepath.Join(cwd, ".pi", "extensions"),
+	} {
+		if entries, err := os.ReadDir(dir); err == nil {
+			for _, f := range entries {
+				if strings.HasPrefix(f.Name(), "segments") {
+					found = append(found, "  Pi: "+cyan.Render(f.Name()))
+					break
+				}
 			}
+			break
 		}
 	}
-	if _, err := os.Stat(filepath.Join(cwd, "opencode.json")); err == nil {
-		found = append(found, "  OpenCode MCP")
+	for _, p := range []string{
+		filepath.Join(cwd, "opencode.json"),
+		filepath.Join(home, "Library", "Application Support", "opencode", "opencode.json"),
+	} {
+		if fileExists(p) {
+			found = append(found, "  OpenCode MCP")
+			break
+		}
 	}
 	if _, err := os.Stat(filepath.Join(cwd, ".beads", "issues.jsonl")); err == nil {
 		found = append(found, "  Beads")
@@ -556,16 +568,24 @@ func runSetup(s *store.Store) error {
 
 	integrations := []integration{
 		{
-			name:      "Pi",
-			detect:    func() bool { return fileExists(filepath.Join(cwd, ".pi")) },
-			installed: func() bool { return fileExists(filepath.Join(cwd, ".pi", "extensions", "segments.ts")) },
+			name: "Pi",
+			detect: func() bool {
+				return fileExists(filepath.Join(home, ".pi", "extensions")) || fileExists(filepath.Join(cwd, ".pi"))
+			},
+			installed: func() bool {
+				return fileExists(filepath.Join(home, ".pi", "extensions", "segments.ts")) ||
+					fileExists(filepath.Join(cwd, ".pi", "extensions", "segments.ts"))
+			},
 			setup: func() error {
-				dir := filepath.Join(cwd, ".pi", "extensions")
+				dir := filepath.Join(home, ".pi", "extensions")
+				if !fileExists(dir) {
+					dir = filepath.Join(cwd, ".pi", "extensions")
+				}
 				os.MkdirAll(dir, 0755)
 				return os.WriteFile(filepath.Join(dir, "segments.ts"), []byte(piExtensionTS), 0644)
 			},
 			prompt: "Set up Pi extension?",
-			detail: "Creates .pi/extensions/segments.ts for task management",
+			detail: "Creates segments.ts in your Pi extensions directory",
 		},
 		{
 			name:      "Claude Code",
@@ -576,12 +596,18 @@ func runSetup(s *store.Store) error {
 			detail:    "Creates .mcp.json with segments server config",
 		},
 		{
-			name:      "OpenCode",
-			detect:    func() bool { return fileExists(filepath.Join(cwd, "opencode.json")) },
-			installed: func() bool { return mcpConfigured(filepath.Join(cwd, "opencode.json")) },
-			setup:     func() error { return setupOpenCodeMCP(cwd, bin) },
-			prompt:    "Set up OpenCode MCP?",
-			detail:    "Adds segments MCP server to opencode.json",
+			name: "OpenCode",
+			detect: func() bool {
+				return fileExists(filepath.Join(cwd, "opencode.json")) ||
+					fileExists(filepath.Join(home, "Library", "Application Support", "opencode", "opencode.json"))
+			},
+			installed: func() bool {
+				return mcpConfigured(filepath.Join(cwd, "opencode.json")) ||
+					mcpConfigured(filepath.Join(home, "Library", "Application Support", "opencode", "opencode.json"))
+			},
+			setup: func() error { return setupOpenCodeMCP(cwd, home, bin) },
+			prompt: "Set up OpenCode MCP?",
+			detail: "Adds segments MCP server to opencode.json",
 		},
 		{
 			name:   "Beads",
@@ -665,8 +691,11 @@ func writeMCPConfig(path, bin string) error {
 	return os.WriteFile(path, append(out, '\n'), 0644)
 }
 
-func setupOpenCodeMCP(cwd, bin string) error {
+func setupOpenCodeMCP(cwd, home, bin string) error {
 	path := filepath.Join(cwd, "opencode.json")
+	if !fileExists(path) {
+		path = filepath.Join(home, "Library", "Application Support", "opencode", "opencode.json")
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return err
@@ -721,7 +750,9 @@ func removeMCPEntry(path string) {
 }
 
 func removeOpenCodeMCP(cwd string) {
+	home, _ := os.UserHomeDir()
 	removeMCPEntry(filepath.Join(cwd, "opencode.json"))
+	removeMCPEntry(filepath.Join(home, "Library", "Application Support", "opencode", "opencode.json"))
 }
 
 func fileExists(path string) bool {

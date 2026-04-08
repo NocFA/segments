@@ -104,7 +104,7 @@ main() {
   "$bin" init >/dev/null 2>&1 || true
 
   printf "\n${B}Segments installed.${R}\n\n"
-  printf "  ${G}segments serve${R}   -- start the server\n"
+  printf "  ${G}segments start${R}   -- start the server\n"
   printf "  ${G}segments setup${R}   -- configure integrations\n"
   printf "  ${G}sg list${R}          -- list your projects\n\n"
 }
