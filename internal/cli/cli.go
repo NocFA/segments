@@ -183,31 +183,16 @@ func runServe(s *store.Store) error {
 
 func autoDetectIntegrations() {
 	cwd, _ := os.Getwd()
-	home, _ := os.UserHomeDir()
 	var found []string
 
-	for _, dir := range []string{
-		filepath.Join(home, ".pi", "extensions"),
-		filepath.Join(cwd, ".pi", "extensions"),
-	} {
-		if entries, err := os.ReadDir(dir); err == nil {
-			for _, f := range entries {
-				if strings.HasPrefix(f.Name(), "segments") {
-					found = append(found, "  Pi: "+cyan.Render(f.Name()))
-					break
-				}
-			}
-			break
-		}
+	// Pi: check if 'pi' command is available in PATH
+	if piPath := findInPath("pi"); piPath != "" {
+		found = append(found, "  Pi: "+cyan.Render(piPath))
 	}
-	for _, p := range []string{
-		filepath.Join(cwd, "opencode.json"),
-		filepath.Join(home, "Library", "Application Support", "opencode", "opencode.json"),
-	} {
-		if fileExists(p) {
-			found = append(found, "  OpenCode MCP")
-			break
-		}
+
+	// OpenCode: check if 'opencode' command is available in PATH
+	if opencodePath := findInPath("opencode"); opencodePath != "" {
+		found = append(found, "  OpenCode: "+cyan.Render(opencodePath))
 	}
 	if _, err := os.Stat(filepath.Join(cwd, ".beads", "issues.jsonl")); err == nil {
 		found = append(found, "  Beads")
@@ -569,9 +554,7 @@ func runSetup(s *store.Store) error {
 	integrations := []integration{
 		{
 			name: "Pi",
-			detect: func() bool {
-				return fileExists(filepath.Join(home, ".pi", "extensions")) || fileExists(filepath.Join(cwd, ".pi"))
-			},
+			detect: func() bool { return findInPath("pi") != "" },
 			installed: func() bool {
 				return fileExists(filepath.Join(home, ".pi", "extensions", "segments.ts")) ||
 					fileExists(filepath.Join(cwd, ".pi", "extensions", "segments.ts"))
@@ -597,10 +580,7 @@ func runSetup(s *store.Store) error {
 		},
 		{
 			name: "OpenCode",
-			detect: func() bool {
-				return fileExists(filepath.Join(cwd, "opencode.json")) ||
-					fileExists(filepath.Join(home, "Library", "Application Support", "opencode", "opencode.json"))
-			},
+			detect: func() bool { return findInPath("opencode") != "" },
 			installed: func() bool {
 				return mcpConfigured(filepath.Join(cwd, "opencode.json")) ||
 					mcpConfigured(filepath.Join(home, "Library", "Application Support", "opencode", "opencode.json"))
@@ -692,18 +672,26 @@ func writeMCPConfig(path, bin string) error {
 }
 
 func setupOpenCodeMCP(cwd, home, bin string) error {
-	path := filepath.Join(cwd, "opencode.json")
-	if !fileExists(path) {
-		path = filepath.Join(home, "Library", "Application Support", "opencode", "opencode.json")
+	// Try known opencode config locations
+	var path string
+	for _, p := range []string{
+		filepath.Join(cwd, "opencode.json"),
+		filepath.Join(home, ".opencode", "opencode.json"),
+		filepath.Join(home, ".opencode", "mcp.json"),
+		filepath.Join(home, "Library", "Application Support", "opencode", "opencode.json"),
+	} {
+		if fileExists(p) {
+			path = p
+			break
+		}
 	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return err
+	if path == "" {
+		path = filepath.Join(home, ".opencode", "opencode.json")
 	}
 
-	var cfg map[string]interface{}
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return err
+	cfg := map[string]interface{}{}
+	if data, err := os.ReadFile(path); err == nil {
+		json.Unmarshal(data, &cfg)
 	}
 
 	servers, _ := cfg["mcpServers"].(map[string]interface{})
@@ -717,6 +705,7 @@ func setupOpenCodeMCP(cwd, home, bin string) error {
 	if err != nil {
 		return err
 	}
+	os.MkdirAll(filepath.Dir(path), 0755)
 	return os.WriteFile(path, append(out, '\n'), 0644)
 }
 
@@ -865,4 +854,26 @@ func expandPath(path string) string {
 		return filepath.Join(home, expanded[1:])
 	}
 	return expanded
+}
+
+// findInPath searches PATH for a command, returns its absolute path or "".
+func findInPath(cmd string) string {
+	// Try LookPath first — finds it anywhere in PATH
+	if path, err := exec.LookPath(cmd); err == nil {
+		return path
+	}
+
+	// Fallback: check common install locations directly
+	home, _ := os.UserHomeDir()
+	for _, p := range []string{
+		filepath.Join(home, ".opencode", "bin", cmd),
+		filepath.Join(home, ".local", "bin", cmd),
+		"/opt/homebrew/bin", cmd,
+		"/usr/local/bin", cmd,
+	} {
+		if fileExists(p) {
+			return p
+		}
+	}
+	return ""
 }
