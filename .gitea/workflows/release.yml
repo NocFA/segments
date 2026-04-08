@@ -1,0 +1,98 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  create-release:
+    name: Create Release
+    runs-on: linux-amd64
+    outputs:
+      upload_url: ${{ steps.create.outputs.upload_url }}
+    steps:
+      - name: Create release
+        id: create
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          API: ${{ github.server_url }}/api/v1
+          REPO: ${{ github.repository }}
+        run: |
+          response=$(curl -fsSL -X POST "${API}/repos/${REPO}/releases" \
+            -H "Authorization: token ${TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "{\"tag_name\":\"${TAG}\",\"name\":\"${TAG}\",\"draft\":false}")
+          upload_url=$(echo "$response" | python3 -c "import sys,json; print(json.load(sys.stdin)['upload_url'])")
+          echo "upload_url=${upload_url}" >> "$GITHUB_OUTPUT"
+
+  build-linux:
+    name: Build (linux/amd64)
+    needs: create-release
+    runs-on: linux-amd64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install musl
+        run: sudo apt-get install -y musl-tools
+
+      - name: Build
+        run: |
+          CGO_ENABLED=1 CC=musl-gcc go build \
+            -ldflags "-X main.version=${{ github.ref_name }} -linkmode external -extldflags '-static'" \
+            -o segments-linux-amd64 ./cmd/segments/
+
+      - name: Upload
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          curl -fsSL -X POST "${{ needs.create-release.outputs.upload_url }}?name=segments-linux-amd64" \
+            -H "Authorization: token ${TOKEN}" \
+            -H "Content-Type: application/octet-stream" \
+            --data-binary "@segments-linux-amd64"
+
+  build-darwin:
+    name: Build (darwin arm64 + amd64)
+    needs: create-release
+    runs-on: macos-arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build arm64
+        run: |
+          CGO_ENABLED=1 GOARCH=arm64 go build \
+            -ldflags "-X main.version=${{ github.ref_name }}" \
+            -o segments-darwin-arm64 ./cmd/segments/
+
+      - name: Build amd64
+        run: |
+          CGO_ENABLED=1 GOARCH=amd64 go build \
+            -ldflags "-X main.version=${{ github.ref_name }}" \
+            -o segments-darwin-amd64 ./cmd/segments/
+
+      - name: Upload arm64
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          curl -fsSL -X POST "${{ needs.create-release.outputs.upload_url }}?name=segments-darwin-arm64" \
+            -H "Authorization: token ${TOKEN}" \
+            -H "Content-Type: application/octet-stream" \
+            --data-binary "@segments-darwin-arm64"
+
+      - name: Upload amd64
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          curl -fsSL -X POST "${{ needs.create-release.outputs.upload_url }}?name=segments-darwin-amd64" \
+            -H "Authorization: token ${TOKEN}" \
+            -H "Content-Type: application/octet-stream" \
+            --data-binary "@segments-darwin-amd64"
