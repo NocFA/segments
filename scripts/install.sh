@@ -45,7 +45,7 @@ install_from_release() {
   fi
 
   local url="${GITEA}/${REPO}/releases/download/${version}/segments-${platform}"
-  info "Downloading segments ${version} for ${platform}..."
+  info "Downloading sg ${version} for ${platform}..."
   if ! curl -fsSL "$url" -o /tmp/segments; then
     info "No binary for ${platform} in ${version}, building from source..."
     return 1
@@ -104,8 +104,8 @@ main() {
   "$bin" init >/dev/null 2>&1 || true
 
   printf "\n${B}Segments installed.${R}\n\n"
-  printf "  ${G}segments start${R}   -- start the server\n"
-  printf "  ${G}segments setup${R}   -- configure integrations\n"
+  printf "  ${G}sg start${R}   -- start the server\n"
+  printf "  ${G}sg setup${R}   -- configure integrations\n"
   printf "  ${G}sg list${R}          -- list your projects\n\n"
 }
 
