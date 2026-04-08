@@ -90,32 +90,4 @@ jobs:
             --data-binary "@segments-darwin-arm64" \
             "${API}/repos/${REPO}/releases/${RELEASE_ID}/assets?name=segments-darwin-arm64"
 
-  build-darwin-amd64:
-    name: Build (darwin/amd64)
-    needs: create-release
-    runs-on: macos-amd64
-    steps:
-      - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-
-      - name: Build
-        run: |
-          CGO_ENABLED=1 GOARCH=amd64 go build \
-            -ldflags "-X main.version=${{ github.ref_name }}" \
-            -o segments-darwin-amd64 ./cmd/segments/
-
-      - name: Upload
-        env:
-          TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          API: ${{ github.server_url }}/api/v1
-          REPO: ${{ github.repository }}
-          RELEASE_ID: ${{ needs.create-release.outputs.release_id }}
-        run: |
-          curl -fsSL -X POST \
-            -H "Authorization: token ${TOKEN}" \
-            -H "Content-Type: application/octet-stream" \
-            --data-binary "@segments-darwin-amd64" \
-            "${API}/repos/${REPO}/releases/${RELEASE_ID}/assets?name=segments-darwin-amd64"

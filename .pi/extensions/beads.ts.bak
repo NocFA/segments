@@ -1,0 +1,368 @@
+/**
+ * Beads Extension for Pi
+ *
+ * Wraps the `bd` CLI to give the LLM structured tools for task tracking.
+ * This lets minimax-2.5 (or any model) manage beads issues across sessions
+ * without losing context on what's been done, what's blocked, and what's next.
+ *
+ * Tools:
+ *   beads_list    - List issues (with filters)
+ *   beads_show    - Show issue details
+ *   beads_create  - Create a new issue
+ *   beads_update  - Update an issue
+ *   beads_close   - Close an issue
+ *   beads_ready   - Show ready work (no blockers)
+ *   beads_dep     - Manage dependencies
+ *   beads_prime   - Get AI-optimized workflow context
+ *
+ * Commands:
+ *   /beads        - Show beads status summary
+ *   /ready        - Show ready tasks
+ */
+
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { Type, type Static } from "@sinclair/typebox";
+import { StringEnum } from "@mariozechner/pi-ai";
+
+async function runBd(
+	pi: ExtensionAPI,
+	args: string[],
+	cwd: string,
+): Promise<{ stdout: string; stderr: string; code: number }> {
+	const result = await pi.exec("bd", [...args, "--json"], { timeout: 15000 });
+	return { stdout: result.stdout, stderr: result.stderr, code: result.code ?? 1 };
+}
+
+async function runBdText(
+	pi: ExtensionAPI,
+	args: string[],
+	cwd: string,
+): Promise<{ stdout: string; stderr: string; code: number }> {
+	const result = await pi.exec("bd", args, { timeout: 15000 });
+	return { stdout: result.stdout, stderr: result.stderr, code: result.code ?? 1 };
+}
+
+export default function (pi: ExtensionAPI) {
+	// --- beads_prime: Get workflow context ---
+	pi.registerTool({
+		name: "beads_prime",
+		label: "Beads Prime",
+		description:
+			"Get AI-optimized beads workflow context. Call this at the START of every session to understand current project state, open tasks, and what to work on next.",
+		promptSnippet: "Get beads workflow context and current project state",
+		promptGuidelines: [
+			"Call beads_prime at the start of each session to load project context.",
+			"Call beads_ready to see what tasks are unblocked and ready to work on.",
+			"Use beads_create to break work into trackable issues before starting.",
+			"Use beads_update with --claim before starting work on a task.",
+			"Use beads_close when a task is completed with a summary of what was done.",
+		],
+		parameters: Type.Object({}),
+		async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+			const prime = await runBdText(pi, ["prime", "--full"], ctx.cwd);
+			const status = await runBd(pi, ["status"], ctx.cwd);
+			const ready = await runBd(pi, ["ready"], ctx.cwd);
+
+			let text = "# Beads Project Context\n\n";
+			if (prime.code === 0 && prime.stdout.trim()) {
+				text += prime.stdout.trim() + "\n\n";
+			}
+			text += "## Status\n```json\n" + status.stdout.trim() + "\n```\n\n";
+			text += "## Ready Tasks\n```json\n" + ready.stdout.trim() + "\n```";
+
+			return {
+				content: [{ type: "text", text }],
+				details: {},
+			};
+		},
+	});
+
+	// --- beads_list: List issues ---
+	pi.registerTool({
+		name: "beads_list",
+		label: "Beads List",
+		description: "List beads issues. Supports filtering by status, type, priority, and label.",
+		promptSnippet: "List beads issues with optional filters",
+		parameters: Type.Object({
+			status: Type.Optional(
+				StringEnum(["open", "in_progress", "closed", "blocked", "deferred"] as const),
+			),
+			type: Type.Optional(Type.String({ description: "Issue type filter (e.g. task, bug, epic)" })),
+			priority: Type.Optional(Type.Number({ description: "Priority filter (0=critical, 1=high, 2=medium, 3=low)" })),
+			label: Type.Optional(Type.String({ description: "Label filter" })),
+		}),
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			const args = ["list"];
+			if (params.status) args.push("--status", params.status);
+			if (params.type) args.push("--type", params.type);
+			if (params.priority !== undefined) args.push("-p", String(params.priority));
+			if (params.label) args.push("--label", params.label);
+
+			const result = await runBd(pi, args, ctx.cwd);
+			if (result.code !== 0) {
+				return {
+					content: [{ type: "text", text: `Error: ${result.stderr || result.stdout}` }],
+					details: {},
+					isError: true,
+				};
+			}
+			return {
+				content: [{ type: "text", text: result.stdout || "No issues found." }],
+				details: {},
+			};
+		},
+	});
+
+	// --- beads_show: Show issue details ---
+	pi.registerTool({
+		name: "beads_show",
+		label: "Beads Show",
+		description: "Show detailed information about a specific beads issue including comments and dependencies.",
+		promptSnippet: "Show details of a specific beads issue",
+		parameters: Type.Object({
+			id: Type.String({ description: "Issue ID (e.g. bd-a1b2)" }),
+		}),
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			const result = await runBd(pi, ["show", params.id], ctx.cwd);
+			if (result.code !== 0) {
+				return {
+					content: [{ type: "text", text: `Error: ${result.stderr || result.stdout}` }],
+					details: {},
+					isError: true,
+				};
+			}
+			return {
+				content: [{ type: "text", text: result.stdout }],
+				details: {},
+			};
+		},
+	});
+
+	// --- beads_create: Create issue ---
+	pi.registerTool({
+		name: "beads_create",
+		label: "Beads Create",
+		description: "Create a new beads issue. Returns the new issue ID.",
+		promptSnippet: "Create a new beads issue with title, type, and priority",
+		parameters: Type.Object({
+			title: Type.String({ description: "Issue title" }),
+			type: Type.Optional(
+				StringEnum(["task", "bug", "epic", "feature", "chore", "spike"] as const),
+			),
+			priority: Type.Optional(Type.Number({ description: "Priority: 0=critical, 1=high, 2=medium, 3=low" })),
+			body: Type.Optional(Type.String({ description: "Issue body/description" })),
+			label: Type.Optional(Type.String({ description: "Label to apply" })),
+			parent: Type.Optional(Type.String({ description: "Parent issue ID for epics (e.g. bd-a1b2)" })),
+		}),
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			const args = ["create", params.title];
+			if (params.type) args.push("--type", params.type);
+			if (params.priority !== undefined) args.push("-p", String(params.priority));
+			if (params.body) args.push("--body", params.body);
+			if (params.label) args.push("--label", params.label);
+			if (params.parent) args.push("--parent", params.parent);
+
+			const result = await runBd(pi, args, ctx.cwd);
+			if (result.code !== 0) {
+				return {
+					content: [{ type: "text", text: `Error: ${result.stderr || result.stdout}` }],
+					details: {},
+					isError: true,
+				};
+			}
+			return {
+				content: [{ type: "text", text: result.stdout }],
+				details: {},
+			};
+		},
+	});
+
+	// --- beads_update: Update issue ---
+	pi.registerTool({
+		name: "beads_update",
+		label: "Beads Update",
+		description: "Update a beads issue. Use --claim to atomically claim and start working on it.",
+		promptSnippet: "Update a beads issue (status, priority, claim, etc.)",
+		parameters: Type.Object({
+			id: Type.String({ description: "Issue ID (e.g. bd-a1b2)" }),
+			claim: Type.Optional(Type.Boolean({ description: "Claim this task (sets assignee + in_progress)" })),
+			status: Type.Optional(
+				StringEnum(["open", "in_progress", "blocked"] as const),
+			),
+			priority: Type.Optional(Type.Number({ description: "New priority" })),
+			title: Type.Optional(Type.String({ description: "New title" })),
+			label: Type.Optional(Type.String({ description: "Add a label" })),
+			body: Type.Optional(Type.String({ description: "New body text" })),
+		}),
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			const args = ["update", params.id];
+			if (params.claim) args.push("--claim");
+			if (params.status) args.push("--status", params.status);
+			if (params.priority !== undefined) args.push("-p", String(params.priority));
+			if (params.title) args.push("--title", params.title);
+			if (params.label) args.push("--label", params.label);
+			if (params.body) args.push("--body", params.body);
+
+			const result = await runBd(pi, args, ctx.cwd);
+			if (result.code !== 0) {
+				return {
+					content: [{ type: "text", text: `Error: ${result.stderr || result.stdout}` }],
+					details: {},
+					isError: true,
+				};
+			}
+			return {
+				content: [{ type: "text", text: result.stdout || `Updated ${params.id}` }],
+				details: {},
+			};
+		},
+	});
+
+	// --- beads_close: Close issue ---
+	pi.registerTool({
+		name: "beads_close",
+		label: "Beads Close",
+		description: "Close a beads issue with a resolution summary.",
+		promptSnippet: "Close a beads issue with a resolution message",
+		parameters: Type.Object({
+			id: Type.String({ description: "Issue ID (e.g. bd-a1b2)" }),
+			message: Type.String({ description: "Resolution summary of what was done" }),
+		}),
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			const result = await runBd(pi, ["close", params.id, params.message], ctx.cwd);
+			if (result.code !== 0) {
+				return {
+					content: [{ type: "text", text: `Error: ${result.stderr || result.stdout}` }],
+					details: {},
+					isError: true,
+				};
+			}
+			return {
+				content: [{ type: "text", text: result.stdout || `Closed ${params.id}` }],
+				details: {},
+			};
+		},
+	});
+
+	// --- beads_ready: Show ready work ---
+	pi.registerTool({
+		name: "beads_ready",
+		label: "Beads Ready",
+		description: "Show tasks that are ready to work on (open, no blockers).",
+		promptSnippet: "List tasks ready to work on (no blockers)",
+		parameters: Type.Object({}),
+		async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+			const result = await runBd(pi, ["ready"], ctx.cwd);
+			if (result.code !== 0) {
+				return {
+					content: [{ type: "text", text: `Error: ${result.stderr || result.stdout}` }],
+					details: {},
+					isError: true,
+				};
+			}
+			return {
+				content: [{ type: "text", text: result.stdout || "No ready tasks." }],
+				details: {},
+			};
+		},
+	});
+
+	// --- beads_dep: Manage dependencies ---
+	pi.registerTool({
+		name: "beads_dep",
+		label: "Beads Dep",
+		description: "Manage issue dependencies. Add blocking relationships between issues.",
+		promptSnippet: "Add or remove dependency links between beads issues",
+		parameters: Type.Object({
+			action: StringEnum(["add", "remove"] as const),
+			child: Type.String({ description: "Child/blocked issue ID" }),
+			parent: Type.String({ description: "Parent/blocking issue ID" }),
+		}),
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			const result = await runBd(pi, ["dep", params.action, params.child, params.parent], ctx.cwd);
+			if (result.code !== 0) {
+				return {
+					content: [{ type: "text", text: `Error: ${result.stderr || result.stdout}` }],
+					details: {},
+					isError: true,
+				};
+			}
+			return {
+				content: [{ type: "text", text: result.stdout || `Dependency ${params.action}ed` }],
+				details: {},
+			};
+		},
+	});
+
+	// --- beads_comment: Add comment to issue ---
+	pi.registerTool({
+		name: "beads_comment",
+		label: "Beads Comment",
+		description: "Add a comment to a beads issue. Use for progress notes, decisions, blockers.",
+		promptSnippet: "Add a comment to a beads issue",
+		parameters: Type.Object({
+			id: Type.String({ description: "Issue ID (e.g. bd-a1b2)" }),
+			message: Type.String({ description: "Comment text" }),
+		}),
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			const result = await runBdText(pi, ["comments", params.id, "--add", params.message], ctx.cwd);
+			if (result.code !== 0) {
+				return {
+					content: [{ type: "text", text: `Error: ${result.stderr || result.stdout}` }],
+					details: {},
+					isError: true,
+				};
+			}
+			return {
+				content: [{ type: "text", text: result.stdout || `Comment added to ${params.id}` }],
+				details: {},
+			};
+		},
+	});
+
+	// --- /beads command: Show status ---
+	pi.registerCommand("beads", {
+		description: "Show beads project status",
+		handler: async (_args, ctx) => {
+			const result = await runBdText(pi, ["status"], ctx.cwd);
+			ctx.ui.notify(result.stdout || "No beads data.", "info");
+		},
+	});
+
+	// --- /ready command: Show ready tasks ---
+	pi.registerCommand("ready", {
+		description: "Show tasks ready to work on",
+		handler: async (_args, ctx) => {
+			const result = await runBdText(pi, ["ready"], ctx.cwd);
+			ctx.ui.notify(result.stdout || "No ready tasks.", "info");
+		},
+	});
+
+	// --- Auto-prime on session start ---
+	pi.on("before_agent_start", async (event, ctx) => {
+		// Inject beads context into every agent turn so the model knows project state
+		const ready = await runBd(pi, ["ready"], ctx.cwd);
+		const list = await runBd(pi, ["list", "--status", "in_progress"], ctx.cwd);
+
+		let context = "\n\n[Beads Context] ";
+		const readyData = ready.stdout.trim();
+		const inProgressData = list.stdout.trim();
+
+		if (inProgressData && inProgressData !== "[]" && inProgressData !== "null") {
+			context += `In-progress tasks: ${inProgressData} `;
+		}
+		if (readyData && readyData !== "[]" && readyData !== "null") {
+			context += `Ready tasks: ${readyData}`;
+		}
+
+		if (context.trim() !== "[Beads Context]") {
+			return {
+				message: {
+					customType: "beads-context",
+					content: context,
+					display: false,
+				},
+			};
+		}
+	});
+}
