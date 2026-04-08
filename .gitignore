@@ -1,5 +1,5 @@
-segments
 cmd/test/
 *.test
 
 opencode.json
+/segments

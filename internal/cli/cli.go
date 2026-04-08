@@ -102,7 +102,7 @@ var aliases = map[string]string{
 	"status":    "list",
 }
 
-func Run(args []string) error {
+func Run(args []string, version string) error {
 	if len(args) < 2 {
 		fmt.Println("usage: segments <command>")
 		fmt.Println("  start, stop, list, add, done, rename, setup, shell, uninstall")
@@ -143,6 +143,9 @@ func Run(args []string) error {
 		return runShell()
 	case "remove":
 		return runRemove()
+	case "version":
+		fmt.Println(version)
+		return nil
 	case "mcp":
 		return mcpServer(s)
 	default:
