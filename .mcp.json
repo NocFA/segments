@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "segments": {
+      "args": [
+        "mcp"
+      ],
+      "command": "/Users/noc/.local/bin/segments"
+    }
+  }
+}
