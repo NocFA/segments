@@ -130,7 +130,7 @@ var cmdGroups = []struct {
 	}},
 	{"Setup", []cmdInfo{
 		{"setup", "configure integrations (required first)", []string{"install"}},
-		{"init", "add integrations to current project", nil},
+		{"init", "initialize a project in the current directory", nil},
 		{"beads", "import tasks from Beads", nil},
 		{"uninstall", "remove segments and all data", []string{"remove"}},
 	}},
@@ -759,31 +759,154 @@ func markSetupComplete() error {
 	return os.WriteFile(setupMarkerPath(), []byte(""), 0644)
 }
 
-// runInit sets up local (per-project) integrations in the current directory.
-// When called non-interactively (e.g. from install script), it only ensures
-// the data directory and config exist.
 func runInit(s *store.Store) error {
 	if err := ensureDataDir(); err != nil {
 		return err
 	}
 
-	// Non-interactive: just ensure data dir exists (install script calls this)
-	if !isTerminal() {
-		return nil
+	cwd, _ := os.Getwd()
+	dirName := filepath.Base(cwd)
+
+	projects, _ := s.ListProjects()
+	for _, p := range projects {
+		if strings.EqualFold(p.Name, dirName) {
+			fmt.Printf("Project %q already exists (%s)\n", p.Name, p.ID[:8])
+			return nil
+		}
 	}
 
-	cwd, _ := os.Getwd()
+	// Offer beads import before creating the project; the import path
+	// creates its own project to keep titles aligned with the directory.
+	if isTerminal() {
+		beadsPath := filepath.Join(cwd, ".beads", "issues.jsonl")
+		if !fileExists(beadsPath) {
+			beadsPath = filepath.Join(cwd, "issues.jsonl")
+		}
+		if fileExists(beadsPath) {
+			if confirm("Import tasks from "+beadsPath+"?", "Creates a project "+dirName+" with tasks from "+beadsPath) {
+				proj, err := s.CreateProject(dirName)
+				if err != nil {
+					return err
+				}
+				fmt.Printf("Created project %q (%s)\n", proj.Name, proj.ID[:8])
+				if err := importBeads(s, proj.ID, beadsPath); err != nil {
+					fmt.Println(red.Render(err.Error()))
+				}
+				offerMissingIntegrations(s, cwd)
+				notifyServer()
+				return nil
+			}
+		}
+	}
+
+	proj, err := s.CreateProject(dirName)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Created project %q (%s)\n", proj.Name, proj.ID[:8])
+
+	offerMissingIntegrations(s, cwd)
+
+	notifyServer()
+	return nil
+}
+
+// offerMissingIntegrations prompts to set up local integrations for detected
+// tools that are not already configured at either global or local scope.
+func offerMissingIntegrations(s *store.Store, cwd string) {
+	if !isTerminal() {
+		return
+	}
 	home, _ := os.UserHomeDir()
 	bin := filepath.Join(home, ".local", "bin", "segments")
 
-	fmt.Println()
-	fmt.Println(bold.Render("Segments Init") + dim.Render(" (local project setup)"))
-	fmt.Println(dim.Render("  Directory: ") + cyan.Render(cwd))
-	fmt.Println()
+	localIgs := buildIntegrations(s, scopeLocal, cwd, home, bin)
+	globalIgs := buildIntegrations(s, scopeGlobal, cwd, home, bin)
 
-	setupIntegrations(s, scopeLocal, cwd, home, bin)
+	globalStatus := map[string]string{}
+	for _, g := range globalIgs {
+		globalStatus[g.name] = integrationStatus(g)
+	}
 
-	fmt.Println()
+	for _, ig := range localIgs {
+		if !ig.detect() {
+			continue
+		}
+		if globalStatus[ig.name] == "current" {
+			continue
+		}
+		if integrationStatus(ig) == "current" {
+			continue
+		}
+		fmt.Println("  " + yellow.Render("○") + " " + ig.name)
+		if confirm(ig.prompt, ig.detail) {
+			if err := ig.setup(); err != nil {
+				fmt.Println("    " + red.Render(err.Error()))
+			} else {
+				fmt.Println("    " + green.Render("Done."))
+			}
+		}
+	}
+}
+
+func importBeads(s *store.Store, projectID, path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", path, err)
+	}
+
+	var imported, skipped int
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		if line == "" {
+			continue
+		}
+
+		var bead struct {
+			ID          string   `json:"id"`
+			Title       string   `json:"title"`
+			Description string   `json:"description"`
+			Status      string   `json:"status"`
+			Priority    int      `json:"priority"`
+			IssueType   string   `json:"issue_type"`
+			Labels      []string `json:"labels"`
+			CloseReason string   `json:"close_reason"`
+		}
+		if err := json.Unmarshal([]byte(line), &bead); err != nil {
+			skipped++
+			continue
+		}
+		if bead.IssueType != "task" {
+			skipped++
+			continue
+		}
+
+		body := bead.Description
+		if bead.CloseReason != "" {
+			body += "\n\n---\nClosed: " + bead.CloseReason
+		}
+		if len(bead.Labels) > 0 {
+			body += "\n\nLabels: " + strings.Join(bead.Labels, ", ")
+		}
+		body += "\n\n[Imported from bead: " + bead.ID + "]"
+
+		_, err = s.CreateTask(projectID, bead.Title, body, bead.Priority)
+		if err != nil {
+			skipped++
+			continue
+		}
+
+		if bead.Status == "closed" {
+			tasks, _ := s.ListTasks(projectID)
+			if len(tasks) > 0 {
+				last := tasks[len(tasks)-1]
+				s.UpdateTask(projectID, last.ID, "", "", models.StatusClosed, -1, "")
+			}
+		}
+
+		imported++
+	}
+
+	fmt.Println(bold.Render("Imported ") + green.Render(strconv.Itoa(imported)) + dim.Render(" tasks (") + yellow.Render(strconv.Itoa(skipped)) + dim.Render(" skipped)"))
 	return nil
 }
 
@@ -880,17 +1003,17 @@ func runBeads(s *store.Store, args []string) error {
 		}
 	}
 
+	cwd, _ := os.Getwd()
 	if beadsDir == "" {
-		cwd, _ := os.Getwd()
 		beadsDir = filepath.Join(cwd, ".beads")
 	}
 	if projectName == "" {
 		projectName = filepath.Base(filepath.Dir(beadsDir))
 	}
 
-	data, err := os.ReadFile(filepath.Join(beadsDir, "issues.jsonl"))
-	if err != nil {
-		return fmt.Errorf("read issues.jsonl: %w", err)
+	beadsPath := filepath.Join(beadsDir, "issues.jsonl")
+	if !fileExists(beadsPath) {
+		return fmt.Errorf("no issues.jsonl found in %s", beadsDir)
 	}
 
 	proj, err := s.CreateProject(projectName)
@@ -899,58 +1022,9 @@ func runBeads(s *store.Store, args []string) error {
 	}
 	fmt.Printf("Created project: %s %s\n", proj.ID, proj.Name)
 
-	var imported, skipped int
-	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
-		if line == "" {
-			continue
-		}
-
-		var bead struct {
-			ID          string   `json:"id"`
-			Title       string   `json:"title"`
-			Description string   `json:"description"`
-			Status      string   `json:"status"`
-			Priority    int      `json:"priority"`
-			IssueType   string   `json:"issue_type"`
-			Labels      []string `json:"labels"`
-			CloseReason string   `json:"close_reason"`
-		}
-		if err := json.Unmarshal([]byte(line), &bead); err != nil {
-			skipped++
-			continue
-		}
-		if bead.IssueType != "task" {
-			skipped++
-			continue
-		}
-
-		body := bead.Description
-		if bead.CloseReason != "" {
-			body += "\n\n---\nClosed: " + bead.CloseReason
-		}
-		if len(bead.Labels) > 0 {
-			body += "\n\nLabels: " + strings.Join(bead.Labels, ", ")
-		}
-		body += "\n\n[Imported from bead: " + bead.ID + "]"
-
-		_, err = s.CreateTask(proj.ID, bead.Title, body, bead.Priority)
-		if err != nil {
-			skipped++
-			continue
-		}
-
-		if bead.Status == "closed" {
-			tasks, _ := s.ListTasks(proj.ID)
-			if len(tasks) > 0 {
-				last := tasks[len(tasks)-1]
-				s.UpdateTask(proj.ID, last.ID, "", "", models.StatusClosed, -1, "")
-			}
-		}
-
-		imported++
+	if err := importBeads(s, proj.ID, beadsPath); err != nil {
+		return err
 	}
-
-	fmt.Println(bold.Render("Imported ") + green.Render(strconv.Itoa(imported)) + dim.Render(" tasks (") + yellow.Render(strconv.Itoa(skipped)) + dim.Render(" skipped)"))
 	notifyServer()
 	return nil
 }
@@ -1103,34 +1177,6 @@ func buildIntegrations(s *store.Store, scope installScope, cwd, home, bin string
 			},
 			prompt: "Set up OpenCode MCP?",
 			detail: fmt.Sprintf("Adds segments to %s", ocPath),
-		})
-	}
-
-	// Beads/JSONL import (only for local scope)
-	beadsPath := filepath.Join(cwd, ".beads", "issues.jsonl")
-	if !fileExists(beadsPath) {
-		beadsPath = filepath.Join(cwd, "issues.jsonl")
-	}
-	if scope == scopeLocal && fileExists(beadsPath) {
-		beadsDir := filepath.Dir(beadsPath)
-		igs = append(igs, integration{
-			name:   "Import",
-			scope:  scopeLocal,
-			detect: func() bool { return true },
-			path: func() string {
-				projects, _ := s.ListProjects()
-				dirName := filepath.Base(cwd)
-				for _, p := range projects {
-					if p.Name == dirName {
-						return beadsPath
-					}
-				}
-				return ""
-			},
-			content: func() string { return "" },
-			setup:   func() error { return runBeads(s, []string{"-d", beadsDir}) },
-			prompt:  "Import issues from " + beadsPath + "?",
-			detail:  "Creates a project with tasks from " + beadsPath,
 		})
 	}
 
