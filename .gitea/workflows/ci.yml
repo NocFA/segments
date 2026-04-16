@@ -40,3 +40,23 @@ jobs:
 
       - name: Test
         run: CGO_ENABLED=1 go test ./...
+
+  build-windows:
+    name: Build (windows/amd64)
+    runs-on: linux-amd64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install mingw-w64
+        run: sudo apt-get install -y mingw-w64
+
+      - name: Build
+        run: |
+          cp web/index.html internal/server/index.html
+          CGO_ENABLED=1 GOOS=windows GOARCH=amd64 CC=x86_64-w64-mingw32-gcc go build \
+            -ldflags "-extldflags '-static'" \
+            -o segments.exe ./cmd/segments/
