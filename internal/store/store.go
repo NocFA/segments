@@ -370,6 +370,18 @@ func (s *Store) UpdateTask(projectID, taskID string, title, body string, status 
 	}
 
 	now := time.Now()
+	if title == "" {
+		title = existing.Title
+	}
+	if body == "" {
+		body = existing.Body
+	}
+	if status == "" {
+		status = existing.Status
+	}
+	if priority < 0 {
+		priority = existing.Priority
+	}
 	blockedByVal := blockedBy
 	if blockedByVal == "" {
 		blockedByVal = existing.BlockedBy
