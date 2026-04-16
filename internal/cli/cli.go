@@ -97,13 +97,11 @@ func notifyServer() {
 
 // aliases maps user-facing command names to internal ones.
 var aliases = map[string]string{
-	"start":     "serve",
-	"stop":      "stop",
-	"uninstall": "remove",
-	"remove":    "remove",
-	"list":      "list",
-	"status":    "list",
-	"install":   "setup",
+	"start":   "serve",
+	"stop":    "stop",
+	"list":    "list",
+	"status":  "list",
+	"install": "setup",
 }
 
 type cmdInfo struct {
@@ -132,7 +130,8 @@ var cmdGroups = []struct {
 		{"setup", "configure integrations (required first)", []string{"install"}},
 		{"init", "initialize a project in the current directory", nil},
 		{"beads", "import tasks from Beads", nil},
-		{"uninstall", "remove segments and all data", []string{"remove"}},
+		{"remove", "remove a project", nil},
+		{"uninstall", "remove segments and all data", nil},
 	}},
 	{"Info", []cmdInfo{
 		{"help", "show this help", []string{"-h", "--help", "-help"}},
@@ -245,9 +244,9 @@ func Run(args []string, version string) error {
 	s := store.NewStore(expandPath(dataDir))
 
 	// Gate most commands on setup completion. These pass through:
-	//   setup, version, remove (uninstall), mcp, context (invoked by integrations)
+	//   setup, version, uninstall, mcp, context (invoked by integrations)
 	switch cmd {
-	case "setup", "version", "remove", "mcp", "context", "shell":
+	case "setup", "version", "uninstall", "mcp", "context", "shell":
 		// allowed
 	default:
 		if !setupComplete() {
@@ -284,7 +283,9 @@ func Run(args []string, version string) error {
 		runHelp()
 		return nil
 	case "remove":
-		return runRemove()
+		return runRemoveProject(s, rest)
+	case "uninstall":
+		return runUninstall()
 	case "version":
 		fmt.Println(version)
 		return nil
@@ -670,10 +671,10 @@ func runList(s *store.Store, args []string) error {
 	return nil
 }
 
-func runRemove() error {
+func runUninstall() error {
 	for _, arg := range os.Args[1:] {
 		if arg == "-f" || arg == "--force" {
-			return doRemove()
+			return doUninstall()
 		}
 	}
 
@@ -681,10 +682,54 @@ func runRemove() error {
 		fmt.Println("Cancelled.")
 		return nil
 	}
-	return doRemove()
+	return doUninstall()
 }
 
-func doRemove() error {
+func runRemoveProject(s *store.Store, args []string) error {
+	var hint string
+	var force bool
+	for _, a := range args {
+		if a == "-f" || a == "--force" {
+			force = true
+		} else if hint == "" {
+			hint = a
+		}
+	}
+
+	if hint == "" {
+		return fmt.Errorf("usage: sg remove <project-id|name> [--force]")
+	}
+
+	projects, err := s.ListProjects()
+	if err != nil {
+		return err
+	}
+	proj := resolveProject(projects, hint)
+	if proj == nil {
+		return fmt.Errorf("no project matching: %s", hint)
+	}
+
+	tasks, _ := s.ListTasks(proj.ID)
+
+	if !force {
+		fmt.Println()
+		fmt.Println(red.Render("WARNING: this will permanently delete:"))
+		fmt.Printf("  project %s (%s) and %d task(s)\n", bold.Render(proj.Name), proj.ID[:8], len(tasks))
+		fmt.Println()
+		fmt.Println("  Re-run with " + cyan.Render("--force") + " to confirm.")
+		fmt.Println()
+		return nil
+	}
+
+	if err := s.DeleteProject(proj.ID); err != nil {
+		return err
+	}
+	fmt.Printf("Removed project %q (%s)\n", proj.Name, proj.ID[:8])
+	notifyServer()
+	return nil
+}
+
+func doUninstall() error {
 	if isRunning() {
 		stopProcess(getPID())
 	}
