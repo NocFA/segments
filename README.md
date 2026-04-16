@@ -34,25 +34,17 @@ Downloads a pre-built binary for your platform. Falls back to building from sour
 ### Windows
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1
+powershell -ExecutionPolicy Bypass -Command "irm https://git.nocfa.net/NocFA/segments/raw/branch/main/scripts/install.ps1 | iex"
 ```
 
-Or clone and run:
+Downloads a pre-built binary. Falls back to building from source if no binary is available. Installs to `%USERPROFILE%\.local\bin` and adds it to the user PATH.
 
-```powershell
-git clone https://git.nocfa.net/NocFA/segments.git
-cd segments
-powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1
-```
-
-The install script automatically detects and installs missing dependencies via [winget](https://learn.microsoft.com/en-us/windows/package-manager/winget/):
+**Prerequisites (source build only):** the script auto-installs missing dependencies via [winget](https://learn.microsoft.com/en-us/windows/package-manager/winget/):
 
 - **[Go 1.24+](https://go.dev/dl/)** -- `winget install GoLang.Go`
 - **[MinGW-w64 (GCC)](https://winlibs.com/)** -- `winget install BrechtSanders.WinLibs.POSIX.UCRT`
 
-**Already present on modern Windows:** Git, winget (ships with Windows 10/11).
-
-The script builds from local source when run from the repo, otherwise clones and builds. Installs to `%USERPROFILE%\.local\bin` and adds it to the user PATH.
+Git and winget ship with Windows 10/11.
 
 ### From source (any platform)
 
@@ -148,7 +140,7 @@ make cross-linux-arm64   # linux arm64
 | macOS | arm64 | CI tested |
 | Linux | amd64 | CI tested |
 | Linux | arm64 | Cross-compiles |
-| Windows | amd64 | Working (native build with MinGW-w64) |
+| Windows | amd64 | CI tested (cross-compiled with MinGW-w64) |
 
 ## License
 
