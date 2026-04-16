@@ -129,7 +129,7 @@ var cmdGroups = []struct {
 		{"rename", "rename a project", nil},
 	}},
 	{"Setup", []cmdInfo{
-		{"setup", "configure integrations", []string{"install"}},
+		{"setup", "configure integrations (required first)", []string{"install"}},
 		{"init", "add integrations to current project", nil},
 		{"beads", "import tasks from Beads", nil},
 		{"uninstall", "remove segments and all data", []string{"remove"}},
@@ -243,6 +243,19 @@ func Run(args []string, version string) error {
 	}
 
 	s := store.NewStore(expandPath(dataDir))
+
+	// Gate most commands on setup completion. These pass through:
+	//   setup, version, remove (uninstall), mcp, context (invoked by integrations)
+	switch cmd {
+	case "setup", "version", "remove", "mcp", "context", "shell":
+		// allowed
+	default:
+		if !setupComplete() {
+			fmt.Fprintln(os.Stderr, red.Render("Segments is not set up."))
+			fmt.Fprintln(os.Stderr, "  Run "+cyan.Render("sg setup")+" first to configure integrations.")
+			os.Exit(1)
+		}
+	}
 
 	switch cmd {
 	case "serve":
@@ -731,6 +744,21 @@ func ensureDataDir() error {
 	return nil
 }
 
+func setupMarkerPath() string {
+	return filepath.Join(expandPath(dataDir), ".setup_complete")
+}
+
+func setupComplete() bool {
+	return fileExists(setupMarkerPath())
+}
+
+func markSetupComplete() error {
+	if err := os.MkdirAll(expandPath(dataDir), 0755); err != nil {
+		return err
+	}
+	return os.WriteFile(setupMarkerPath(), []byte(""), 0644)
+}
+
 // runInit sets up local (per-project) integrations in the current directory.
 // When called non-interactively (e.g. from install script), it only ensures
 // the data directory and config exist.
@@ -1196,12 +1224,16 @@ func runSetup(s *store.Store) error {
 
 	setupIntegrations(s, scope, cwd, home, bin)
 
+	if err := markSetupComplete(); err != nil {
+		return err
+	}
+
 	cfg, _ := server.LoadConfig(filepath.Join(dataDir, "config.yaml"))
 	listenAddr := cfg.Bind + ":" + cfg.Port
 
 	fmt.Println()
 	fmt.Println(dim.Render("Server: ") + cyan.Render("http://"+listenAddr))
-	fmt.Println(dim.Render("Tip: ") + cyan.Render("sg init") + dim.Render(" to add integrations to any project directory"))
+	fmt.Println(dim.Render("Tip: ") + cyan.Render("sg init") + dim.Render(" in a project directory to start tracking tasks"))
 	fmt.Println()
 	return nil
 }
