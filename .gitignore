@@ -2,4 +2,6 @@ cmd/test/
 *.test
 
 opencode.json
+.mcp.json
 /segments
+/segments.exe
