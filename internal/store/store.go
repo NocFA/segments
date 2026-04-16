@@ -160,13 +160,16 @@ func (s *Store) UpdateProject(id, name string) (*models.Project, error) {
 }
 
 func (s *Store) DeleteProject(id string) error {
-	projPath := filepath.Join(s.basePath, "projects", id)
-	if err := os.RemoveAll(projPath); err != nil {
-		return err
+	// Close the cached LMDB env before removing files, otherwise the data
+	// file is locked on Windows.
+	if v, ok := s.envs.LoadAndDelete(id); ok {
+		if ec, ok := v.(*envCache); ok && ec.env != nil {
+			ec.env.Close()
+		}
 	}
 
-	s.envs.Delete(id)
-	return nil
+	projPath := filepath.Join(s.basePath, "projects", id)
+	return os.RemoveAll(projPath)
 }
 
 func (s *Store) NextSortOrder(projectID string) (int, error) {
