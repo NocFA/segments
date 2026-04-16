@@ -113,21 +113,30 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("before_agent_start", async (event, ctx) => {
+    const shortcuts = [
+      `Segments task shortcuts:`,
+      `  "segment it", "segment this", "sg it", "sg this"`,
+      `    Create a task in the active Segments project capturing the topic under`,
+      `    discussion. Use seg_add (or segments_create_task). Choose a concise title.`,
+      `    ALWAYS write a body that describes the task in enough detail to survive`,
+      `    a context wipe: what needs doing, relevant file paths, constraints, and`,
+      `    the expected outcome. A fresh session with no prior history should be`,
+      `    able to pick it up from the body alone. If multiple projects exist,`,
+      `    prefer the one matching cwd.`,
+    ].join("\n");
     try {
       const projects = await request("/api/projects") as any[];
       if (projects.length) {
         const project = projects[0];
         const tasks = await request(`/api/projects/${project.id}/tasks`) as any[];
         const todo = tasks.filter(t => t.status === "todo");
-        if (todo.length) {
-          return {
-            message: {
-              customType: "segments-context",
-              content: `[Current project: ${project.name}, ${todo.length} pending tasks]`,
-              display: false,
-            },
-          };
-        }
+        return {
+          message: {
+            customType: "segments-context",
+            content: `${shortcuts}\n\n[Current project: ${project.name}, ${todo.length} pending tasks]`,
+            display: false,
+          },
+        };
       }
     } catch {}
   });
