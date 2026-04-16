@@ -986,13 +986,18 @@ func runDone(s *store.Store, args []string) error {
 }
 
 func runBeads(s *store.Store, args []string) error {
-	var beadsDir, projectName string
+	var beadsDir, beadsFile, projectName string
 
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "-d":
 			if i+1 < len(args) {
 				beadsDir = args[i+1]
+				i++
+			}
+		case "-f":
+			if i+1 < len(args) {
+				beadsFile = args[i+1]
 				i++
 			}
 		case "-p":
@@ -1004,16 +1009,25 @@ func runBeads(s *store.Store, args []string) error {
 	}
 
 	cwd, _ := os.Getwd()
-	if beadsDir == "" {
-		beadsDir = filepath.Join(cwd, ".beads")
-	}
-	if projectName == "" {
-		projectName = filepath.Base(filepath.Dir(beadsDir))
+	var beadsPath string
+	switch {
+	case beadsFile != "":
+		beadsPath = beadsFile
+	case beadsDir != "":
+		beadsPath = filepath.Join(beadsDir, "issues.jsonl")
+	default:
+		beadsPath = filepath.Join(cwd, ".beads", "issues.jsonl")
+		if !fileExists(beadsPath) {
+			beadsPath = filepath.Join(cwd, "issues.jsonl")
+		}
 	}
 
-	beadsPath := filepath.Join(beadsDir, "issues.jsonl")
 	if !fileExists(beadsPath) {
-		return fmt.Errorf("no issues.jsonl found in %s", beadsDir)
+		return fmt.Errorf("no issues.jsonl found (tried .beads/issues.jsonl and issues.jsonl in %s)", cwd)
+	}
+
+	if projectName == "" {
+		projectName = filepath.Base(cwd)
 	}
 
 	proj, err := s.CreateProject(projectName)
