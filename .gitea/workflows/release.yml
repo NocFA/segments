@@ -60,6 +60,40 @@ jobs:
             --data-binary "@segments-linux-amd64" \
             "${API}/repos/${REPO}/releases/${RELEASE_ID}/assets?name=segments-linux-amd64"
 
+  build-windows-amd64:
+    name: Build (windows/amd64)
+    needs: create-release
+    runs-on: linux-amd64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install mingw-w64
+        run: sudo apt-get install -y mingw-w64
+
+      - name: Build
+        run: |
+          cp web/index.html internal/server/index.html
+          CGO_ENABLED=1 GOOS=windows GOARCH=amd64 CC=x86_64-w64-mingw32-gcc go build \
+            -ldflags "-X main.version=${{ github.ref_name }} -extldflags '-static'" \
+            -o segments-windows-amd64.exe ./cmd/segments/
+
+      - name: Upload
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          API: ${{ github.server_url }}/api/v1
+          REPO: ${{ github.repository }}
+          RELEASE_ID: ${{ needs.create-release.outputs.release_id }}
+        run: |
+          curl -fsSL -X POST \
+            -H "Authorization: token ${TOKEN}" \
+            -H "Content-Type: application/octet-stream" \
+            --data-binary "@segments-windows-amd64.exe" \
+            "${API}/repos/${REPO}/releases/${RELEASE_ID}/assets?name=segments-windows-amd64.exe"
+
   build-darwin-arm64:
     name: Build (darwin/arm64)
     needs: create-release
