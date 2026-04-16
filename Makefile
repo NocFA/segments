@@ -17,5 +17,9 @@ cross-linux-amd64:
 cross-linux-arm64:
 	CGO_ENABLED=1 GOOS=linux GOARCH=arm64 CC=aarch64-linux-musl-gcc go build $(LDFLAGS) -o $(BINARY)-linux-arm64 ./cmd/segments/
 
+cross-windows-amd64:
+	cp web/index.html internal/server/index.html
+	CGO_ENABLED=1 GOOS=windows GOARCH=amd64 CC=x86_64-w64-mingw32-gcc go build -ldflags "-X main.version=$(VERSION) -extldflags '-static'" -o $(BINARY)-windows-amd64.exe ./cmd/segments/
+
 clean:
 	rm -f $(BINARY) $(BINARY)-*
