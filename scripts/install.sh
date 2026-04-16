@@ -101,12 +101,10 @@ main() {
   ln -sf "$bin" "${INSTALL_DIR}/sg"
   add_to_path
 
-  "$bin" init >/dev/null 2>&1 || true
-
   printf "\n${B}Segments installed.${R}\n\n"
-  printf "  ${G}sg start${R}   -- start the server\n"
-  printf "  ${G}sg setup${R}   -- configure integrations\n"
-  printf "  ${G}sg list${R}          -- list your projects\n\n"
+  printf "  ${G}sg setup${R}   -- configure integrations (run this first)\n"
+  printf "  ${G}sg init${R}    -- initialize a project in the current directory\n"
+  printf "  ${G}sg start${R}   -- start the server\n\n"
 }
 
 main

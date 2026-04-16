@@ -163,13 +163,10 @@ Copy-Item "$InstallDir\segments.exe" "$InstallDir\sg.exe" -Force
 
 Add-ToPath
 
-# Init data directory
-try { & "$InstallDir\segments.exe" init 2>$null } catch {}
-
 Write-Host ""
 Ok "Segments installed."
 Write-Host ""
+Write-Host "  sg setup   -- configure integrations (run this first)" -ForegroundColor Green
+Write-Host "  sg init    -- initialize a project in the current directory" -ForegroundColor Green
 Write-Host "  sg start   -- start the server" -ForegroundColor Green
-Write-Host "  sg setup   -- configure integrations" -ForegroundColor Green
-Write-Host "  sg list    -- list your projects" -ForegroundColor Green
 Write-Host ""
