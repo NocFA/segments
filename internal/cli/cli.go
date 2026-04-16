@@ -1581,13 +1581,23 @@ func fileExists(path string) bool {
 	return err == nil
 }
 
+const segmentsShortcutInstructions = `Segments task shortcuts:
+  "segment it", "segment this", "sg it", "sg this"
+    Create a task in the active Segments project capturing the topic under
+    discussion. Use the segments MCP (segments_create_task) or Pi seg_add.
+    Choose a concise title. ALWAYS write a body that describes the task in
+    enough detail to survive a context wipe: what needs doing, relevant
+    file paths, constraints, and the expected outcome. A fresh session
+    with no prior history should be able to pick it up from the body
+    alone. If multiple projects exist, prefer the one matching cwd.`
+
 func runContext(s *store.Store) error {
 	projects, err := s.ListProjects()
 	if err != nil || len(projects) == 0 {
 		return nil
 	}
 
-	var lines []string
+	lines := []string{segmentsShortcutInstructions, ""}
 	for _, p := range projects {
 		tasks, _ := s.ListTasks(p.ID)
 		var todo, inProgress, done, blocker int
