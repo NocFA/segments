@@ -45,3 +45,5 @@ func stopStrayDaemons() {
 }
 
 func cleanupSelf() {}
+
+func applyDaemonSysProcAttr(cmd *exec.Cmd) {}

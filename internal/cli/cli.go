@@ -327,6 +327,7 @@ func ensureDaemon() (int, error) {
 		cmd.Stdout = f
 		cmd.Stderr = f
 	}
+	applyDaemonSysProcAttr(cmd)
 	if err := cmd.Start(); err != nil {
 		return 0, err
 	}
@@ -974,13 +975,13 @@ func importBeads(s *store.Store, projectID, path string) error {
 }
 
 func runAdd(s *store.Store, args []string) error {
-	var projectID, title, body string
+	var hint, title, body string
 
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "-p":
 			if i+1 < len(args) {
-				projectID = args[i+1]
+				hint = args[i+1]
 				i++
 			}
 		case "-m":
@@ -996,8 +997,9 @@ func runAdd(s *store.Store, args []string) error {
 	if title == "" {
 		return fmt.Errorf("title required")
 	}
-	if projectID == "" {
-		return fmt.Errorf("project id required (-p)")
+	projectID, err := resolveProjectIDForMCP(s, hint)
+	if err != nil {
+		return err
 	}
 
 	t, err := s.CreateTask(projectID, title, body, 0)
@@ -1010,10 +1012,11 @@ func runAdd(s *store.Store, args []string) error {
 }
 
 func runClose(s *store.Store, args []string) error {
-	if len(args) < 2 {
-		return fmt.Errorf("usage: sg close <project-id> <task-id>")
+	projectID, taskID, err := resolveProjectAndTaskArgs(s, args, "close")
+	if err != nil {
+		return err
 	}
-	t, err := s.UpdateTask(args[0], args[1], "", "", models.StatusClosed, -1, "")
+	t, err := s.UpdateTask(projectID, taskID, "", "", models.StatusClosed, -1, "")
 	if err != nil {
 		return err
 	}
@@ -1036,16 +1039,45 @@ func runRename(s *store.Store, args []string) error {
 }
 
 func runDone(s *store.Store, args []string) error {
-	if len(args) < 2 {
-		return fmt.Errorf("usage: sg done <project-id> <task-id>")
+	projectID, taskID, err := resolveProjectAndTaskArgs(s, args, "done")
+	if err != nil {
+		return err
 	}
-	t, err := s.UpdateTask(args[0], args[1], "", "", models.StatusDone, -1, "")
+	t, err := s.UpdateTask(projectID, taskID, "", "", models.StatusDone, -1, "")
 	if err != nil {
 		return err
 	}
 	fmt.Println(t.ID)
 	notifyServerEvent("task:updated", t)
 	return nil
+}
+
+// resolveProjectAndTaskArgs supports both the 1-arg form (sg done <task_id>,
+// project auto-resolved from the task lookup) and the legacy 2-arg form
+// (sg done <project_hint> <task_id>). Task IDs may be UUID prefixes.
+func resolveProjectAndTaskArgs(s *store.Store, args []string, cmd string) (string, string, error) {
+	switch len(args) {
+	case 1:
+		task, proj, err := findTaskByPrefix(s, args[0])
+		if err != nil {
+			return "", "", err
+		}
+		return proj.ID, task.ID, nil
+	case 2:
+		projectID, err := resolveProjectIDForMCP(s, args[0])
+		if err != nil {
+			return "", "", err
+		}
+		tasks, _ := s.ListTasks(projectID)
+		for i := range tasks {
+			if strings.HasPrefix(tasks[i].ID, args[1]) {
+				return projectID, tasks[i].ID, nil
+			}
+		}
+		return "", "", fmt.Errorf("task not found in project: %s", args[1])
+	default:
+		return "", "", fmt.Errorf("usage: sg %s <task-id>  OR  sg %s <project-hint> <task-id>", cmd, cmd)
+	}
 }
 
 func runBeads(s *store.Store, args []string) error {
@@ -1644,17 +1676,22 @@ When to use it (proactively, without being asked):
 
 Task body is the contract. Every body must be self-contained: what to do, relevant file paths, constraints, expected outcome. A fresh session with no history must be able to pick it up from the body alone.
 
-Priority (integer 0-3; use numbers, not "high"/"medium"/"low"):
-  0  default. Unprioritized backlog.
-  1  low. Nice to have.
-  2  medium. Normal work the user asked for.
-  3  high. Do before other work; user flagged it urgent or it unblocks others.
-Leave at 0 unless the user signals urgency or the task clearly gates others.
+Priority (integer 0-3; use numbers, NOT the words "high"/"medium"/"low"):
+  1  URGENT. Do NOW. User flagged this as urgent, or it is actively blocking other work.
+  2  NORMAL. Regular dev work the user wants done this session.
+  3  BACKLOG. Future / idea / nice-to-have / "let's discuss later". Not this session.
+  0  unset. Only for legacy tasks created before triage; never pick 0 when CREATING a task.
+When you create a task, you MUST choose 1, 2, or 3 based on intent. Do not default to 0. If the user said "let's do X now" it is 2; if they said "sometime we should X" it is 3; if they said "drop everything and fix X" it is 1.
 
 Blockers (blocked_by):
-  Set blocked_by=<task_id> ONLY when task A literally cannot start until task B lands (e.g. "set up project" blocks "add home page"). Leave empty for soft ordering -- priority and list order already handle that. Never create cycles.
+  Set blocked_by=<task_id> whenever task A literally cannot start until task B lands. This is NOT optional ornamentation -- it tells the agent what order to work in and what is currently "ready". Never create cycles.
+  Common cases that ALWAYS need a blocker edge:
+    - Greenfield scaffold: the bootstrap/init task (e.g. "Initialize project") blocks every downstream task. Link every other task in the batch to it.
+    - Infra before feature: "Install Stripe SDK" blocks "Build Merch page".
+    - Schema before use: "Add DB migration" blocks "Wire up form submission".
+  In segments_create_tasks, use "#0".."#N" to reference earlier entries in the same batch; the server resolves these to real UUIDs. Prefer this over creating tasks in two separate calls just to get the UUIDs.
 
-MCP tools (server name: segments). project_id is OPTIONAL on all task tools; it auto-resolves from CWD basename, single-project fallback, or $SEGMENTS_PROJECT_ID.
+MCP tools (server name: "segments"). Your client may expose them under these exact names or with an "mcp__segments__" prefix (Claude Code does). Trust your client's own tool list; do not invent names. project_id is OPTIONAL on all task tools: it auto-resolves from CWD basename, single-project fallback, or $SEGMENTS_PROJECT_ID. If your client advertises no segments_* tools at all, the MCP server is not connected -- fall back to the CLI below; do not guess tool names.
   segments_list_projects()
   segments_list_tasks(project_id?, status?)
   segments_get_task(task_id, project_id?)
@@ -1666,14 +1703,12 @@ MCP tools (server name: segments). project_id is OPTIONAL on all task tools; it 
       Only provided fields change; omitted fields are preserved.
   segments_delete_task(task_id, project_id?)
 
-CLI fallback (when MCP is unavailable):
+CLI fallback (only if MCP tools are unavailable). -p is optional: sg auto-resolves project_id the same way MCP does (CWD basename / single-project / $SEGMENTS_PROJECT_ID). Pass -p only to override.
   sg list                                   List projects and tasks
   sg view <task_id>                         Show full task details
-  sg add -p <project_id> "<title>" -m "<body>"   Create a task
-  sg done <project_id> <task_id>            Mark task done
-  sg close <project_id> <task_id>           Close a task
-
-Pi tools mirror the MCP set: seg_tasks, seg_add, seg_add_many, seg_update, seg_done, seg_rm.
+  sg add "<title>" -m "<body>"              Create a task (auto-resolves project)
+  sg done <task_id>                         Mark task done (auto-resolves project)
+  sg close <task_id>                        Close a task (auto-resolves project)
 
 IDs below are full UUIDs, ready to paste into tool calls.`
 
@@ -1743,9 +1778,38 @@ func mcpServer(s *store.Store) error {
 			}
 			return err
 		}
+		// JSON-RPC 2.0: messages without an id are notifications and MUST NOT
+		// receive a response. Claude Code sends notifications/initialized after
+		// initialize; replying to it (even with an error) is a protocol violation
+		// that can prevent the client from registering our tools.
+		if _, hasID := req["id"]; !hasID {
+			continue
+		}
 		enc.Encode(handleMCP(s, req))
 	}
 }
+
+// supportedMCPProtocolVersions lists every protocol version this server speaks,
+// newest first. If the client's requested version is in this list we echo it
+// back; otherwise we fall back to the first (latest) version we support.
+var supportedMCPProtocolVersions = []string{"2025-06-18", "2025-03-26", "2024-11-05"}
+
+func negotiateProtocolVersion(req map[string]interface{}) string {
+	params, _ := req["params"].(map[string]interface{})
+	requested, _ := params["protocolVersion"].(string)
+	for _, v := range supportedMCPProtocolVersions {
+		if v == requested {
+			return v
+		}
+	}
+	return supportedMCPProtocolVersions[0]
+}
+
+const mcpServerInstructions = `Segments tracks multi-session work as a dependency graph. Use segments_create_tasks to scaffold whole queues in ONE round-trip (the tasks argument MUST be a real JSON array, not a stringified one). Use segments_update_task status=in_progress when starting work and status=done when it lands. Capture every "we should also..." as a new task so it survives context wipes. project_id is optional: auto-resolves from CWD basename, single-project fallback, or $SEGMENTS_PROJECT_ID.
+
+Priority (integer, required when creating): 1=urgent/NOW, 2=normal session work, 3=backlog/future/idea, 0=unset (legacy only; do NOT pick 0 when creating). Always pick 1/2/3 based on user intent.
+
+blocked_by: set whenever task A literally cannot start until task B lands. In segments_create_tasks, use "#0".."#N" to reference earlier entries in the same batch. For greenfield scaffolds, the bootstrap/init task almost always blocks every downstream task -- link them.`
 
 func handleMCP(s *store.Store, req map[string]interface{}) map[string]interface{} {
 	method, _ := req["method"].(string)
@@ -1759,9 +1823,12 @@ func handleMCP(s *store.Store, req map[string]interface{}) map[string]interface{
 	switch method {
 	case "initialize":
 		resp["result"] = map[string]interface{}{
-			"protocolVersion": "2024-11-05",
-			"capabilities":    map[string]interface{}{},
-			"serverInfo":      map[string]string{"name": "segments", "version": "0.1.0"},
+			"protocolVersion": negotiateProtocolVersion(req),
+			"capabilities": map[string]interface{}{
+				"tools": map[string]interface{}{"listChanged": false},
+			},
+			"serverInfo":   map[string]string{"name": "segments", "version": "0.1.0"},
+			"instructions": mcpServerInstructions,
 		}
 	case "tools/list":
 		resp["result"] = map[string]interface{}{
@@ -1774,8 +1841,12 @@ func handleMCP(s *store.Store, req map[string]interface{}) map[string]interface{
 		resp["result"] = map[string]interface{}{
 			"content": []map[string]string{{"type": "text", "text": callTool(s, tool, args)}},
 		}
+	case "prompts/list":
+		resp["result"] = map[string]interface{}{"prompts": []interface{}{}}
+	case "resources/list":
+		resp["result"] = map[string]interface{}{"resources": []interface{}{}}
 	default:
-		resp["error"] = map[string]string{"code": "-32601", "message": "method not found"}
+		resp["error"] = map[string]interface{}{"code": -32601, "message": "method not found"}
 	}
 
 	return resp
@@ -1810,28 +1881,28 @@ func mcpToolDefs() []map[string]interface{} {
 				"project_id": optProject,
 				"status":     prop("string", "Optional filter: todo | in_progress | done | closed | blocker"),
 			})},
-		{"name": "segments_create_task", "description": "Create a single task. For two or more tasks, prefer segments_create_tasks (one call, much cheaper). Priority is an integer 0-3 (0=none, 1=low, 2=medium, 3=high) -- use numbers, not English words.",
+		{"name": "segments_create_task", "description": "Create a single task. For two or more tasks, ALWAYS prefer segments_create_tasks (one call, much cheaper, supports cross-task blocked_by refs).",
 			"inputSchema": schema([]string{"title"}, map[string]interface{}{
 				"project_id": optProject,
 				"title":      prop("string", "Task title"),
 				"body":       prop("string", "Self-contained description: what to do, file paths, constraints, expected outcome. A fresh session must be able to pick it up from this alone."),
-				"priority":   prop("number", "0-3. Leave at 0 unless user flagged urgency or task gates others."),
-				"blocked_by": prop("string", "Task ID of a hard blocker (task that must land first). Leave empty for soft ordering."),
+				"priority":   prop("number", "Integer. 1=urgent/NOW, 2=normal session work, 3=backlog/future. Always pick 1, 2, or 3 when creating; 0 is legacy-only."),
+				"blocked_by": prop("string", "Task ID of a hard blocker. Set this whenever task A literally cannot start until task B lands (e.g. bootstrap blocks all downstream work)."),
 			})},
-		{"name": "segments_create_tasks", "description": "Create multiple tasks in one call. Preferred for planning/scaffolding work -- scaffold a whole queue in one round-trip. In blocked_by, '#0', '#1', ..., '#N' reference earlier tasks in the same batch (resolved to their new UUIDs). Priority semantics match segments_create_task.",
+		{"name": "segments_create_tasks", "description": "Create multiple tasks in one call. PREFERRED for planning/scaffolding -- scaffold a whole queue in one round-trip instead of N separate calls. The 'tasks' argument MUST be a real JSON array of objects (NOT a JSON-encoded string). In blocked_by, '#0'..'#N' references earlier entries in the same batch (resolved to their new UUIDs) -- use this for dependency chains like bootstrap -> downstream tasks.",
 			"inputSchema": schema([]string{"tasks"}, map[string]interface{}{
 				"project_id": optProject,
 				"tasks": map[string]interface{}{
 					"type":        "array",
-					"description": "Tasks to create in order. Each object: {title, body?, priority?, blocked_by?}.",
+					"description": "JSON array of task objects (NOT a stringified array). Each object: {title, body?, priority?, blocked_by?}. priority is an integer 1/2/3 based on user intent.",
 					"items": map[string]interface{}{
 						"type":     "object",
 						"required": []string{"title"},
 						"properties": map[string]interface{}{
 							"title":      prop("string", "Task title"),
 							"body":       prop("string", "Self-contained description"),
-							"priority":   prop("number", "0-3"),
-							"blocked_by": prop("string", "Task ID or '#<index>' of an earlier entry in this batch"),
+							"priority":   prop("number", "Integer. 1=urgent/NOW, 2=normal session work, 3=backlog/future. Pick 1/2/3 based on user intent."),
+							"blocked_by": prop("string", "Task ID or '#<index>' of an earlier entry in this batch. Use '#0' to link to the first task (e.g. when everything depends on a bootstrap task)."),
 						},
 					},
 				},
@@ -1843,7 +1914,7 @@ func mcpToolDefs() []map[string]interface{} {
 				"title":      prop("string", "New title"),
 				"body":       prop("string", "New body/description"),
 				"status":     prop("string", "todo | in_progress | done | closed | blocker"),
-				"priority":   prop("number", "0-3 (0=none, 1=low, 2=medium, 3=high)"),
+				"priority":   prop("number", "Integer. 1=urgent/NOW, 2=normal session work, 3=backlog/future. 0=unset (legacy only)."),
 				"blocked_by": prop("string", "ID of blocking task"),
 			})},
 		{"name": "segments_delete_task", "description": "Delete a task.",
@@ -1966,9 +2037,19 @@ func callTool(s *store.Store, tool string, args map[string]interface{}) string {
 		if err != nil {
 			return errMsg(err)
 		}
-		raw, _ := args["tasks"].([]interface{})
+		raw, ok := args["tasks"].([]interface{})
+		if !ok {
+			// Tolerate LLMs that stringify the array argument: parse it back into
+			// a real array and continue. The schema description tells them not to
+			// do this, but failing hard just burns tokens on a retry.
+			if tasksStr, isStr := args["tasks"].(string); isStr {
+				if perr := json.Unmarshal([]byte(tasksStr), &raw); perr != nil {
+					return errMsg(fmt.Errorf("tasks must be a JSON array of objects, not a string. Received a string that failed to parse: %v", perr))
+				}
+			}
+		}
 		if len(raw) == 0 {
-			return errMsg(fmt.Errorf("tasks array is empty"))
+			return errMsg(fmt.Errorf("tasks must be a non-empty JSON array of {title, body?, priority?, blocked_by?} objects"))
 		}
 		created := make([]*models.Task, 0, len(raw))
 		for i, item := range raw {
