@@ -1620,15 +1620,40 @@ func fileExists(path string) bool {
 	return err == nil
 }
 
-const segmentsShortcutInstructions = `Segments task shortcuts:
-  "segment it", "segment this", "sg it", "sg this"
-    Create a task in the active Segments project capturing the topic under
-    discussion. Use the segments MCP (segments_create_task) or Pi seg_add.
-    Choose a concise title. ALWAYS write a body that describes the task in
-    enough detail to survive a context wipe: what needs doing, relevant
-    file paths, constraints, and the expected outcome. A fresh session
-    with no prior history should be able to pick it up from the body
-    alone. If multiple projects exist, prefer the one matching cwd.`
+const segmentsShortcutInstructions = `Segments is the persistent task tracker for this project. Tasks survive context wipes and outlive sessions; TodoWrite does not. Use Segments to plan multi-step work, scaffold upcoming tasks, track what is in progress, and capture follow-ups so they are not lost.
+
+When to use it (proactively, without being asked):
+  Planning           Break a feature or refactor into one task per step before coding.
+  Scaffolding        Stub upcoming work as todo tasks so the queue is visible.
+  Starting work      segments_update_task status=in_progress on the task you pick up. Keep at most one in_progress at a time.
+  Finishing          segments_update_task status=done when the work lands.
+  New scope          Capture every "we should also..." as a new todo task immediately so it survives a context wipe.
+  "segment it" / "sg it" / "seg it" / "segment this" / "sg this" / "seg this"
+                     Capture the current topic as a task right now, no clarifying questions.
+
+Task body is the contract. Every body must be self-contained: what to do, relevant file paths, constraints, expected outcome. A fresh session with no history must be able to pick it up from the body alone.
+
+MCP tools (server name: segments):
+  segments_list_projects()
+  segments_list_tasks(project_id)
+  segments_get_task(project_id, task_id)
+  segments_create_task(project_id, title, body, priority?)
+      priority: 0=none, 1=low, 2=medium, 3=high
+  segments_update_task(project_id, task_id, title?, body?, status?, priority?, blocked_by?)
+      status: todo | in_progress | done | closed | blocker
+      Only provided fields change; omitted fields are preserved.
+  segments_delete_task(project_id, task_id)
+
+CLI fallback (when MCP is unavailable):
+  sg list                                   List projects and tasks
+  sg view <task_id>                         Show full task details
+  sg add -p <project_id> "<title>" -m "<body>"   Create a task
+  sg done <project_id> <task_id>            Mark task done
+  sg close <project_id> <task_id>           Close a task
+
+Pi tools mirror the MCP set: seg_tasks, seg_add, seg_update, seg_done, seg_rm.
+
+IDs below are full UUIDs, ready to paste into tool calls. If multiple projects are listed, prefer the one whose name matches cwd.`
 
 func runContext(s *store.Store) error {
 	projects, err := s.ListProjects()
@@ -1645,17 +1670,17 @@ func runContext(s *store.Store) error {
 			switch t.Status {
 			case models.StatusTodo:
 				todo++
-				entry := fmt.Sprintf("- [todo] %s (id:%s)", t.Title, t.ID[:8])
+				entry := fmt.Sprintf("  [todo] %s  task_id=%s", t.Title, t.ID)
 				if t.Priority > 0 {
 					entry += fmt.Sprintf(" P%d", t.Priority)
 				}
 				if t.BlockedBy != "" {
-					entry += " blocked:" + t.BlockedBy[:8]
+					entry += " blocked_by=" + t.BlockedBy
 				}
 				open = append(open, entry)
 			case models.StatusInProgress:
 				inProgress++
-				entry := fmt.Sprintf("- [in_progress] %s (id:%s)", t.Title, t.ID[:8])
+				entry := fmt.Sprintf("  [in_progress] %s  task_id=%s", t.Title, t.ID)
 				if t.Priority > 0 {
 					entry += fmt.Sprintf(" P%d", t.Priority)
 				}
@@ -1664,12 +1689,12 @@ func runContext(s *store.Store) error {
 				done++
 			case models.StatusBlocker:
 				blocker++
-				entry := fmt.Sprintf("- [blocker] %s (id:%s)", t.Title, t.ID[:8])
+				entry := fmt.Sprintf("  [blocker] %s  task_id=%s", t.Title, t.ID)
 				open = append(open, entry)
 			}
 		}
-		lines = append(lines, fmt.Sprintf("Project: %s (id:%s, %d tasks: %d todo, %d in progress, %d done, %d blockers)",
-			p.Name, p.ID[:8], len(tasks), todo, inProgress, done, blocker))
+		lines = append(lines, fmt.Sprintf("Project: %s  project_id=%s  (%d tasks: %d todo, %d in progress, %d done, %d blockers)",
+			p.Name, p.ID, len(tasks), todo, inProgress, done, blocker))
 		lines = append(lines, open...)
 	}
 
