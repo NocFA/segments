@@ -347,6 +347,10 @@ func (s *Server) handleDeleteTask(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
+	var msg WSMessage
+	if err := json.NewDecoder(r.Body).Decode(&msg); err == nil && msg.Type != "" {
+		s.hub.Broadcast(msg)
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 

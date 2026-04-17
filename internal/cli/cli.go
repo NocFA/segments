@@ -81,6 +81,14 @@ func pidFileData() (int, string, error) {
 }
 
 func notifyServer() {
+	notifyServerEvent("", nil)
+}
+
+// notifyServerEvent pings the running daemon so it can broadcast a WebSocket
+// delta. If typ is non-empty, the payload is passed through as a WSMessage
+// body; otherwise it is a plain sync ping (the server will still 204 but
+// clients get no delta, which means they must wait for the next broadcast).
+func notifyServerEvent(typ string, data interface{}) {
 	pid, addr, err := pidFileData()
 	if err != nil {
 		return
@@ -88,11 +96,14 @@ func notifyServer() {
 	if p, err := os.FindProcess(pid); err != nil || p.Pid != pid {
 		return
 	}
-	// addr is either "host:port" or just a port (legacy pid files)
 	if !strings.Contains(addr, ":") {
 		addr = "127.0.0.1:" + addr
 	}
-	http.Post("http://"+addr+"/internal/sync", "application/json", bytes.NewReader(nil))
+	var body []byte
+	if typ != "" {
+		body, _ = json.Marshal(map[string]interface{}{"type": typ, "data": data})
+	}
+	http.Post("http://"+addr+"/internal/sync", "application/json", bytes.NewReader(body))
 }
 
 // aliases maps user-facing command names to internal ones.
@@ -994,7 +1005,7 @@ func runAdd(s *store.Store, args []string) error {
 		return err
 	}
 	fmt.Println(t.ID)
-	notifyServer()
+	notifyServerEvent("task:created", t)
 	return nil
 }
 
@@ -1007,7 +1018,7 @@ func runClose(s *store.Store, args []string) error {
 		return err
 	}
 	fmt.Println(t.ID)
-	notifyServer()
+	notifyServerEvent("task:updated", t)
 	return nil
 }
 
@@ -1020,7 +1031,7 @@ func runRename(s *store.Store, args []string) error {
 		return err
 	}
 	fmt.Println(p.ID + " " + p.Name)
-	notifyServer()
+	notifyServerEvent("project:updated", p)
 	return nil
 }
 
@@ -1033,7 +1044,7 @@ func runDone(s *store.Store, args []string) error {
 		return err
 	}
 	fmt.Println(t.ID)
-	notifyServer()
+	notifyServerEvent("task:updated", t)
 	return nil
 }
 
@@ -1623,7 +1634,7 @@ func fileExists(path string) bool {
 const segmentsShortcutInstructions = `Segments is the persistent task tracker for this project. Tasks survive context wipes and outlive sessions; TodoWrite does not. Use Segments to plan multi-step work, scaffold upcoming tasks, track what is in progress, and capture follow-ups so they are not lost.
 
 When to use it (proactively, without being asked):
-  Planning           Break a feature or refactor into one task per step before coding.
+  Planning           Break a feature or refactor into steps BEFORE coding. Use segments_create_tasks to stub the whole queue in one call.
   Scaffolding        Stub upcoming work as todo tasks so the queue is visible.
   Starting work      segments_update_task status=in_progress on the task you pick up. Keep at most one in_progress at a time.
   Finishing          segments_update_task status=done when the work lands.
@@ -1633,16 +1644,27 @@ When to use it (proactively, without being asked):
 
 Task body is the contract. Every body must be self-contained: what to do, relevant file paths, constraints, expected outcome. A fresh session with no history must be able to pick it up from the body alone.
 
-MCP tools (server name: segments):
+Priority (integer 0-3; use numbers, not "high"/"medium"/"low"):
+  0  default. Unprioritized backlog.
+  1  low. Nice to have.
+  2  medium. Normal work the user asked for.
+  3  high. Do before other work; user flagged it urgent or it unblocks others.
+Leave at 0 unless the user signals urgency or the task clearly gates others.
+
+Blockers (blocked_by):
+  Set blocked_by=<task_id> ONLY when task A literally cannot start until task B lands (e.g. "set up project" blocks "add home page"). Leave empty for soft ordering -- priority and list order already handle that. Never create cycles.
+
+MCP tools (server name: segments). project_id is OPTIONAL on all task tools; it auto-resolves from CWD basename, single-project fallback, or $SEGMENTS_PROJECT_ID.
   segments_list_projects()
-  segments_list_tasks(project_id)
-  segments_get_task(project_id, task_id)
-  segments_create_task(project_id, title, body, priority?)
-      priority: 0=none, 1=low, 2=medium, 3=high
-  segments_update_task(project_id, task_id, title?, body?, status?, priority?, blocked_by?)
+  segments_list_tasks(project_id?, status?)
+  segments_get_task(task_id, project_id?)
+  segments_create_task(title, body?, priority?, blocked_by?, project_id?)
+  segments_create_tasks(tasks: [{title, body?, priority?, blocked_by?}, ...], project_id?)
+      Preferred for planning: scaffold the whole queue in one call. Use "#0".."#N" in blocked_by to reference earlier tasks in the same batch (resolved to their new UUIDs).
+  segments_update_task(task_id, title?, body?, status?, priority?, blocked_by?, project_id?)
       status: todo | in_progress | done | closed | blocker
       Only provided fields change; omitted fields are preserved.
-  segments_delete_task(project_id, task_id)
+  segments_delete_task(task_id, project_id?)
 
 CLI fallback (when MCP is unavailable):
   sg list                                   List projects and tasks
@@ -1651,9 +1673,9 @@ CLI fallback (when MCP is unavailable):
   sg done <project_id> <task_id>            Mark task done
   sg close <project_id> <task_id>           Close a task
 
-Pi tools mirror the MCP set: seg_tasks, seg_add, seg_update, seg_done, seg_rm.
+Pi tools mirror the MCP set: seg_tasks, seg_add, seg_add_many, seg_update, seg_done, seg_rm.
 
-IDs below are full UUIDs, ready to paste into tool calls. If multiple projects are listed, prefer the one whose name matches cwd.`
+IDs below are full UUIDs, ready to paste into tool calls.`
 
 func runContext(s *store.Store) error {
 	projects, err := s.ListProjects()
@@ -1770,104 +1792,256 @@ func mcpToolDefs() []map[string]interface{} {
 		}
 		return s
 	}
+	optProject := prop("string", "Project ID. Optional: auto-resolves from CWD basename, single-project fallback, or $SEGMENTS_PROJECT_ID.")
 	return []map[string]interface{}{
-		{"name": "segments_list_projects", "description": "List all projects",
+		{"name": "segments_list_projects", "description": "List all projects.",
 			"inputSchema": schema(nil, map[string]interface{}{})},
-		{"name": "segments_create_project", "description": "Create a project",
+		{"name": "segments_create_project", "description": "Create a project.",
 			"inputSchema": schema([]string{"name"}, map[string]interface{}{
 				"name": prop("string", "Project name"),
 			})},
-		{"name": "segments_rename_project", "description": "Rename a project",
+		{"name": "segments_rename_project", "description": "Rename a project.",
 			"inputSchema": schema([]string{"project_id", "name"}, map[string]interface{}{
 				"project_id": prop("string", "Project ID"),
 				"name":       prop("string", "New name"),
 			})},
 		{"name": "segments_list_tasks", "description": "List tasks for a project. Returns all fields: id, title, status, priority, body, blocked_by, dates.",
-			"inputSchema": schema([]string{"project_id"}, map[string]interface{}{
-				"project_id": prop("string", "Project ID"),
+			"inputSchema": schema(nil, map[string]interface{}{
+				"project_id": optProject,
+				"status":     prop("string", "Optional filter: todo | in_progress | done | closed | blocker"),
 			})},
-		{"name": "segments_create_task", "description": "Create a task",
-			"inputSchema": schema([]string{"project_id", "title"}, map[string]interface{}{
-				"project_id": prop("string", "Project ID"),
+		{"name": "segments_create_task", "description": "Create a single task. For two or more tasks, prefer segments_create_tasks (one call, much cheaper). Priority is an integer 0-3 (0=none, 1=low, 2=medium, 3=high) -- use numbers, not English words.",
+			"inputSchema": schema([]string{"title"}, map[string]interface{}{
+				"project_id": optProject,
 				"title":      prop("string", "Task title"),
-				"body":       prop("string", "Task body/description"),
-				"priority":   prop("number", "Priority 0-3 (0=none, 1=low, 2=medium, 3=high)"),
+				"body":       prop("string", "Self-contained description: what to do, file paths, constraints, expected outcome. A fresh session must be able to pick it up from this alone."),
+				"priority":   prop("number", "0-3. Leave at 0 unless user flagged urgency or task gates others."),
+				"blocked_by": prop("string", "Task ID of a hard blocker (task that must land first). Leave empty for soft ordering."),
+			})},
+		{"name": "segments_create_tasks", "description": "Create multiple tasks in one call. Preferred for planning/scaffolding work -- scaffold a whole queue in one round-trip. In blocked_by, '#0', '#1', ..., '#N' reference earlier tasks in the same batch (resolved to their new UUIDs). Priority semantics match segments_create_task.",
+			"inputSchema": schema([]string{"tasks"}, map[string]interface{}{
+				"project_id": optProject,
+				"tasks": map[string]interface{}{
+					"type":        "array",
+					"description": "Tasks to create in order. Each object: {title, body?, priority?, blocked_by?}.",
+					"items": map[string]interface{}{
+						"type":     "object",
+						"required": []string{"title"},
+						"properties": map[string]interface{}{
+							"title":      prop("string", "Task title"),
+							"body":       prop("string", "Self-contained description"),
+							"priority":   prop("number", "0-3"),
+							"blocked_by": prop("string", "Task ID or '#<index>' of an earlier entry in this batch"),
+						},
+					},
+				},
 			})},
 		{"name": "segments_update_task", "description": "Update a task. Only provided fields are changed; omitted fields are preserved.",
-			"inputSchema": schema([]string{"project_id", "task_id"}, map[string]interface{}{
-				"project_id": prop("string", "Project ID"),
+			"inputSchema": schema([]string{"task_id"}, map[string]interface{}{
+				"project_id": optProject,
 				"task_id":    prop("string", "Task ID"),
 				"title":      prop("string", "New title"),
 				"body":       prop("string", "New body/description"),
-				"status":     prop("string", "Status: todo, in_progress, done, closed, blocker"),
-				"priority":   prop("number", "Priority 0-3 (0=none, 1=low, 2=medium, 3=high)"),
+				"status":     prop("string", "todo | in_progress | done | closed | blocker"),
+				"priority":   prop("number", "0-3 (0=none, 1=low, 2=medium, 3=high)"),
 				"blocked_by": prop("string", "ID of blocking task"),
 			})},
-		{"name": "segments_delete_task", "description": "Delete a task",
-			"inputSchema": schema([]string{"project_id", "task_id"}, map[string]interface{}{
-				"project_id": prop("string", "Project ID"),
+		{"name": "segments_delete_task", "description": "Delete a task.",
+			"inputSchema": schema([]string{"task_id"}, map[string]interface{}{
+				"project_id": optProject,
 				"task_id":    prop("string", "Task ID"),
 			})},
-		{"name": "segments_get_task", "description": "Get full task details including body, priority, blocked_by, and dates",
-			"inputSchema": schema([]string{"project_id", "task_id"}, map[string]interface{}{
-				"project_id": prop("string", "Project ID"),
+		{"name": "segments_get_task", "description": "Get full task details including body, priority, blocked_by, and dates.",
+			"inputSchema": schema([]string{"task_id"}, map[string]interface{}{
+				"project_id": optProject,
 				"task_id":    prop("string", "Task ID"),
 			})},
 	}
 }
 
+// resolveProjectIDForMCP picks a project for MCP tool calls. Order: explicit
+// hint (UUID prefix or name) -> $SEGMENTS_PROJECT_ID -> CWD basename match ->
+// single-project fallback. Returns an error with available project names when
+// resolution is ambiguous so the agent can correct itself.
+func resolveProjectIDForMCP(s *store.Store, hint string) (string, error) {
+	projects, err := s.ListProjects()
+	if err != nil {
+		return "", err
+	}
+	if len(projects) == 0 {
+		return "", fmt.Errorf("no projects exist. Run `sg init` or call segments_create_project first")
+	}
+	if hint != "" {
+		if p := resolveProject(projects, hint); p != nil {
+			return p.ID, nil
+		}
+		return "", fmt.Errorf("no project matches %q", hint)
+	}
+	if env := os.Getenv("SEGMENTS_PROJECT_ID"); env != "" {
+		if p := resolveProject(projects, env); p != nil {
+			return p.ID, nil
+		}
+	}
+	if p := resolveProject(projects, ""); p != nil {
+		return p.ID, nil
+	}
+	names := make([]string, len(projects))
+	for i, p := range projects {
+		names[i] = fmt.Sprintf("%s (%s)", p.Name, p.ID)
+	}
+	return "", fmt.Errorf("cannot auto-resolve project: %d exist [%s]. Pass project_id explicitly or set $SEGMENTS_PROJECT_ID", len(projects), strings.Join(names, ", "))
+}
+
 func callTool(s *store.Store, tool string, args map[string]interface{}) string {
 	str := func(key string) string { v, _ := args[key].(string); return v }
 	marshal := func(v interface{}) string { d, _ := json.Marshal(v); return string(d) }
+	errMsg := func(err error) string { return marshal(map[string]string{"error": err.Error()}) }
+	intArg := func(key string, def int) int {
+		v, ok := args[key]
+		if !ok {
+			return def
+		}
+		if f, ok := v.(float64); ok {
+			return int(f)
+		}
+		return def
+	}
 
 	switch tool {
 	case "segments_list_projects":
 		list, _ := s.ListProjects()
 		return marshal(list)
 	case "segments_create_project":
-		p, _ := s.CreateProject(str("name"))
-		notifyServer()
+		p, err := s.CreateProject(str("name"))
+		if err != nil {
+			return errMsg(err)
+		}
+		notifyServerEvent("project:created", p)
 		return marshal(p)
 	case "segments_rename_project":
-		p, _ := s.UpdateProject(str("project_id"), str("name"))
-		notifyServer()
+		p, err := s.UpdateProject(str("project_id"), str("name"))
+		if err != nil {
+			return errMsg(err)
+		}
+		notifyServerEvent("project:updated", p)
 		return marshal(p)
 	case "segments_list_tasks":
-		list, _ := s.ListTasks(str("project_id"))
+		pid, err := resolveProjectIDForMCP(s, str("project_id"))
+		if err != nil {
+			return errMsg(err)
+		}
+		list, err := s.ListTasks(pid)
+		if err != nil {
+			return errMsg(err)
+		}
+		if filter := str("status"); filter != "" {
+			var filtered []models.Task
+			for _, t := range list {
+				if string(t.Status) == filter {
+					filtered = append(filtered, t)
+				}
+			}
+			list = filtered
+		}
 		return marshal(list)
 	case "segments_create_task":
-		priority := 0
-		if p, ok := args["priority"]; ok {
-			if pf, ok := p.(float64); ok {
-				priority = int(pf)
+		pid, err := resolveProjectIDForMCP(s, str("project_id"))
+		if err != nil {
+			return errMsg(err)
+		}
+		t, err := s.CreateTask(pid, str("title"), str("body"), intArg("priority", 0))
+		if err != nil {
+			return errMsg(err)
+		}
+		if blockedBy := str("blocked_by"); blockedBy != "" {
+			t, err = s.UpdateTask(pid, t.ID, "", "", "", -1, blockedBy)
+			if err != nil {
+				return errMsg(err)
 			}
 		}
-		t, err := s.CreateTask(str("project_id"), str("title"), str("body"), priority)
-		if err != nil {
-			return marshal(map[string]string{"error": err.Error()})
-		}
-		notifyServer()
+		notifyServerEvent("task:created", t)
 		return marshal(t)
-	case "segments_update_task":
-		status := models.TaskStatus(str("status"))
-		priority := -1
-		if p, ok := args["priority"]; ok {
-			if pf, ok := p.(float64); ok {
-				priority = int(pf)
-			}
-		}
-		t, err := s.UpdateTask(str("project_id"), str("task_id"), str("title"), str("body"), status, priority, str("blocked_by"))
+	case "segments_create_tasks":
+		pid, err := resolveProjectIDForMCP(s, str("project_id"))
 		if err != nil {
-			return marshal(map[string]string{"error": err.Error()})
+			return errMsg(err)
 		}
-		notifyServer()
+		raw, _ := args["tasks"].([]interface{})
+		if len(raw) == 0 {
+			return errMsg(fmt.Errorf("tasks array is empty"))
+		}
+		created := make([]*models.Task, 0, len(raw))
+		for i, item := range raw {
+			obj, ok := item.(map[string]interface{})
+			if !ok {
+				return errMsg(fmt.Errorf("tasks[%d] is not an object", i))
+			}
+			title, _ := obj["title"].(string)
+			if title == "" {
+				return errMsg(fmt.Errorf("tasks[%d].title is required", i))
+			}
+			body, _ := obj["body"].(string)
+			priority := 0
+			if p, ok := obj["priority"]; ok {
+				if pf, ok := p.(float64); ok {
+					priority = int(pf)
+				}
+			}
+			blockedBy, _ := obj["blocked_by"].(string)
+			if strings.HasPrefix(blockedBy, "#") {
+				idx, perr := strconv.Atoi(blockedBy[1:])
+				if perr != nil || idx < 0 || idx >= len(created) {
+					return errMsg(fmt.Errorf("tasks[%d].blocked_by=%q: no earlier batch entry at that index", i, blockedBy))
+				}
+				blockedBy = created[idx].ID
+			}
+			t, err := s.CreateTask(pid, title, body, priority)
+			if err != nil {
+				return errMsg(fmt.Errorf("tasks[%d]: %v", i, err))
+			}
+			if blockedBy != "" {
+				t, err = s.UpdateTask(pid, t.ID, "", "", "", -1, blockedBy)
+				if err != nil {
+					return errMsg(fmt.Errorf("tasks[%d] set blocked_by: %v", i, err))
+				}
+			}
+			created = append(created, t)
+		}
+		notifyServerEvent("tasks:created", created)
+		return marshal(created)
+	case "segments_update_task":
+		pid, err := resolveProjectIDForMCP(s, str("project_id"))
+		if err != nil {
+			return errMsg(err)
+		}
+		status := models.TaskStatus(str("status"))
+		priority := intArg("priority", -1)
+		t, err := s.UpdateTask(pid, str("task_id"), str("title"), str("body"), status, priority, str("blocked_by"))
+		if err != nil {
+			return errMsg(err)
+		}
+		notifyServerEvent("task:updated", t)
 		return marshal(t)
 	case "segments_delete_task":
-		s.DeleteTask(str("project_id"), str("task_id"))
-		notifyServer()
+		pid, err := resolveProjectIDForMCP(s, str("project_id"))
+		if err != nil {
+			return errMsg(err)
+		}
+		taskID := str("task_id")
+		if err := s.DeleteTask(pid, taskID); err != nil {
+			return errMsg(err)
+		}
+		notifyServerEvent("task:deleted", map[string]string{"id": taskID, "project_id": pid})
 		return `{"deleted": true}`
 	case "segments_get_task":
-		t, _ := s.GetTask(str("project_id"), str("task_id"))
+		pid, err := resolveProjectIDForMCP(s, str("project_id"))
+		if err != nil {
+			return errMsg(err)
+		}
+		t, err := s.GetTask(pid, str("task_id"))
+		if err != nil {
+			return errMsg(err)
+		}
 		return marshal(t)
 	default:
 		return `{"error": "unknown tool"}`

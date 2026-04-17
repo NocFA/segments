@@ -260,13 +260,57 @@ function send(msg) { ws && ws.send(JSON.stringify(msg)); }
 
 function handleMessage(msg) {
   switch(msg.type) {
-    case 'connected': loadProjects(); break;
-    case 'task:created': loadTasks(); break;
-    case 'task:updated': loadTasks(); break;
-    case 'task:deleted': loadTasks(); break;
-    case 'project:created': loadProjects(); break;
-    case 'project:deleted': loadProjects(); break;
+    case 'connected':
+      loadProjects();
+      break;
+    case 'task:created':
+    case 'task:updated':
+      if (msg.data && msg.data.project_id === projectSelect.value) {
+        upsertTaskLocal(msg.data);
+        sortAndRender();
+      } else if (!msg.data) {
+        loadTasks();
+      }
+      break;
+    case 'tasks:created':
+      if (Array.isArray(msg.data)) {
+        const pid = projectSelect.value;
+        let changed = false;
+        for (const t of msg.data) {
+          if (t && t.project_id === pid) {
+            upsertTaskLocal(t);
+            changed = true;
+          }
+        }
+        if (changed) sortAndRender();
+      }
+      break;
+    case 'task:deleted':
+      if (msg.data && msg.data.id) {
+        const before = tasks.length;
+        tasks = tasks.filter(t => t.id !== msg.data.id);
+        if (tasks.length !== before) renderTasks();
+      } else {
+        loadTasks();
+      }
+      break;
+    case 'project:created':
+    case 'project:updated':
+    case 'project:deleted':
+      loadProjects();
+      break;
   }
+}
+
+function upsertTaskLocal(task) {
+  const idx = tasks.findIndex(t => t.id === task.id);
+  if (idx >= 0) tasks[idx] = task;
+  else tasks.push(task);
+}
+
+function sortAndRender() {
+  tasks.sort((a,b) => a.sort_order - b.sort_order);
+  renderTasks();
 }
 
 async function loadProjects() {
@@ -294,6 +338,8 @@ function renderTasks() {
     taskList.innerHTML = '<div class="empty">No tasks</div>';
     return;
   }
+  const expanded = new Set();
+  taskList.querySelectorAll('.task.expanded').forEach(el => expanded.add(el.dataset.id));
   taskList.innerHTML = tasks.map(t => {
     const blocker = t.blocked_by ? tasks.find(x => x.id === t.blocked_by) : null;
     const blockerLabel = blocker ? `<span class="blocker">← blocked by ${escape(blocker.title.substring(0,15))}</span>` : '';
@@ -331,6 +377,11 @@ function renderTasks() {
       '</div>' +
       '</div>';
   }).join('');
+  if (expanded.size) {
+    taskList.querySelectorAll('.task').forEach(el => {
+      if (expanded.has(el.dataset.id)) el.classList.add('expanded');
+    });
+  }
 }
 
 function escape(s) { return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
