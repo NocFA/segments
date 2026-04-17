@@ -8,7 +8,8 @@ import (
 	"strings"
 )
 
-const taskName = `Segments\AutoStart`
+const taskName = "SegmentsAutoStart"
+const legacyTaskName = `Segments\AutoStart`
 
 func serviceIntegration(bin string) integration {
 	return integration{
@@ -21,28 +22,33 @@ func serviceIntegration(bin string) integration {
 			if err := exec.Command("schtasks", "/Query", "/TN", taskName).Run(); err == nil {
 				return "current"
 			}
-			// Fallback: list all tasks and scan for the name. Some Windows
-			// versions misreport /TN lookups against backslash-pathed names.
-			out, err := exec.Command("schtasks", "/Query", "/FO", "CSV", "/NH").CombinedOutput()
-			if err == nil && strings.Contains(string(out), taskName) {
-				return "current"
+			if err := exec.Command("schtasks", "/Query", "/TN", legacyTaskName).Run(); err == nil {
+				return "outdated"
 			}
 			return "missing"
 		},
 		setup: func() error {
-			out, err := exec.Command("schtasks", "/Create",
-				"/TN", taskName,
-				"/TR", fmt.Sprintf(`"%s" serve`, bin),
-				"/SC", "ONLOGON",
-				"/RL", "LIMITED",
-				"/F",
-			).CombinedOutput()
+			exec.Command("schtasks", "/Delete", "/TN", legacyTaskName, "/F").Run()
+			// PowerShell Register-ScheduledTask creates a per-user task
+			// without needing admin. schtasks /SC ONLOGON without /RU
+			// implies "any user" which does require admin.
+			script := fmt.Sprintf(
+				`$u="$env:USERDOMAIN\$env:USERNAME";`+
+					`$a=New-ScheduledTaskAction -Execute '%s' -Argument 'serve';`+
+					`$t=New-ScheduledTaskTrigger -AtLogOn -User $u;`+
+					`$p=New-ScheduledTaskPrincipal -UserId $u -LogonType Interactive;`+
+					`$s=New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries;`+
+					`Register-ScheduledTask -TaskName '%s' -Action $a -Trigger $t -Principal $p -Settings $s -Force | Out-Null`,
+				strings.ReplaceAll(bin, "'", "''"),
+				taskName,
+			)
+			out, err := exec.Command("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script).CombinedOutput()
 			if err != nil {
 				msg := strings.TrimSpace(string(out))
 				if msg == "" {
-					return fmt.Errorf("schtasks: %w", err)
+					return fmt.Errorf("Register-ScheduledTask: %w", err)
 				}
-				return fmt.Errorf("schtasks: %s", msg)
+				return fmt.Errorf("%s", msg)
 			}
 			return nil
 		},
@@ -53,4 +59,5 @@ func serviceIntegration(bin string) integration {
 
 func removeService() {
 	exec.Command("schtasks", "/Delete", "/TN", taskName, "/F").Run()
+	exec.Command("schtasks", "/Delete", "/TN", legacyTaskName, "/F").Run()
 }

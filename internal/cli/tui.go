@@ -40,13 +40,12 @@ func (m confirmM) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m confirmM) View() string {
 	var b strings.Builder
-	b.WriteString("\n")
-	b.WriteString(warnStyle.Render(" " + m.title + " "))
+	b.WriteString(warnStyle.Render(m.title))
 	b.WriteString("\n\n")
 	if m.detail != "" {
-		b.WriteString(" " + m.detail + "\n\n")
+		b.WriteString(m.detail + "\n\n")
 	}
-	b.WriteString(dim.Render(" arrows to select, enter to confirm, q to cancel"))
+	b.WriteString(dim.Render("arrows to select, enter to confirm, q to cancel"))
 	b.WriteString("\n\n")
 
 	for i, label := range []string{"No", "Yes"} {
@@ -57,13 +56,15 @@ func (m confirmM) View() string {
 		}
 		b.WriteString("  ")
 	}
-	b.WriteString("\n")
-	return box.Render(b.String())
+	// Trailing newline: bubbletea's renderer erases the final line on stop,
+	// so give it an empty line to erase instead of the box's bottom border.
+	return box.Render(b.String()) + "\n"
 }
 
 func confirm(title, detail string) bool {
 	m := confirmM{title: title, detail: detail}
 	final, err := tea.NewProgram(m).Run()
+	restoreVT()
 	if err != nil {
 		return false
 	}
@@ -105,30 +106,31 @@ func (m selectM) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m selectM) View() string {
 	var b strings.Builder
-	b.WriteString("\n")
-	b.WriteString(selStyle.Render(" " + m.title + " "))
+	b.WriteString(selStyle.Render(m.title))
 	b.WriteString("\n\n")
-	b.WriteString(dim.Render(" arrows to select, enter to confirm, q to cancel"))
+	b.WriteString(dim.Render("arrows to select, enter to confirm, q to cancel"))
 	b.WriteString("\n\n")
 	for i, opt := range m.options {
 		if i == m.focus {
-			b.WriteString(selStyle.Render("  > " + opt))
+			b.WriteString(selStyle.Render("> " + opt))
 		} else {
-			b.WriteString(optStyle.Render("    " + opt))
+			b.WriteString(optStyle.Render("  " + opt))
 		}
 		if i < len(m.details) && m.details[i] != "" {
 			b.WriteString(dim.Render("  " + m.details[i]))
 		}
-		b.WriteString("\n")
+		if i < len(m.options)-1 {
+			b.WriteString("\n")
+		}
 	}
-	b.WriteString("\n")
-	return box.Render(b.String())
+	return box.Render(b.String()) + "\n"
 }
 
 // selectOption shows a list of options and returns the selected index, or -1 if cancelled.
 func selectOption(title string, options []string, details []string) int {
 	m := selectM{title: title, options: options, details: details, result: -1}
 	final, err := tea.NewProgram(m).Run()
+	restoreVT()
 	if err != nil {
 		return -1
 	}
