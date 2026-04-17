@@ -5,6 +5,7 @@ package cli
 import (
 	"os"
 	"os/exec"
+	"strconv"
 	"syscall"
 )
 
@@ -24,6 +25,21 @@ func stopProcess(pid int) error {
 		return err
 	}
 	return proc.Kill()
+}
+
+// stopStrayDaemons kills any lingering segments/sg processes owned by the
+// current user, excluding this process. Used by uninstall to catch daemons
+// that aren't in the pid file (stale pid, multiple installs, etc.).
+func stopStrayDaemons() {
+	selfFilter := "PID ne " + strconv.Itoa(os.Getpid())
+	for _, name := range []string{"segments.exe", "sg.exe"} {
+		cmd := exec.Command("taskkill", "/F",
+			"/FI", "IMAGENAME eq "+name,
+			"/FI", selfFilter,
+		)
+		cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000} // CREATE_NO_WINDOW
+		cmd.Run()
+	}
 }
 
 func cleanupSelf() {

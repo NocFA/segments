@@ -733,6 +733,9 @@ func doUninstall() error {
 	if isRunning() {
 		stopProcess(getPID())
 	}
+	// Catch orphans the pid file didn't know about (stale pid, second install,
+	// daemon started without updating the pid file).
+	stopStrayDaemons()
 
 	removeService()
 
@@ -767,6 +770,10 @@ func doUninstall() error {
 	removeClaudeHook(filepath.Join(cwd, ".claude", "settings.json"))
 	// Clean global integrations
 	os.Remove(filepath.Join(home, ".pi", "agent", "extensions", "segments.ts"))
+	if _, err := exec.LookPath("claude"); err == nil {
+		exec.Command("claude", "mcp", "remove", "segments", "--scope", "user").Run()
+	}
+	// Drop legacy ~/.claude/mcp.json entry written by older setup runs.
 	removeMCPEntry(filepath.Join(home, ".claude", "mcp.json"))
 	removeClaudeHook(filepath.Join(home, ".claude", "settings.json"))
 
@@ -1170,7 +1177,7 @@ func buildIntegrations(s *store.Store, scope installScope, cwd, home, bin string
 	if _, err := exec.LookPath("claude"); err == nil {
 		var mcpPath, settingsPath string
 		if scope == scopeGlobal {
-			mcpPath = filepath.Join(home, ".claude", "mcp.json")
+			mcpPath = filepath.Join(home, ".claude.json")
 			settingsPath = filepath.Join(home, ".claude", "settings.json")
 		} else {
 			mcpPath = filepath.Join(cwd, ".mcp.json")
@@ -1194,13 +1201,13 @@ func buildIntegrations(s *store.Store, scope installScope, cwd, home, bin string
 				return "missing"
 			},
 			setup: func() error {
-				if err := writeMCPConfig(mcpPath, bin); err != nil {
+				if err := writeClaudeCodeMCP(scope, mcpPath); err != nil {
 					return err
 				}
-				return writeClaudeHook(settingsPath, bin)
+				return writeClaudeHook(settingsPath)
 			},
 			prompt: "Set up Claude Code integration?",
-			detail: fmt.Sprintf("Adds MCP server to %s and session hook to %s", mcpPath, settingsPath),
+			detail: fmt.Sprintf("Registers MCP server and adds session hook (%s)", settingsPath),
 		})
 	}
 
@@ -1392,7 +1399,7 @@ func claudeHookConfigured(settingsPath string) bool {
 	return false
 }
 
-func writeClaudeHook(settingsPath, bin string) error {
+func writeClaudeHook(settingsPath string) error {
 	os.MkdirAll(filepath.Dir(settingsPath), 0755)
 
 	cfg := map[string]interface{}{}
@@ -1405,7 +1412,7 @@ func writeClaudeHook(settingsPath, bin string) error {
 		hooks = map[string]interface{}{}
 	}
 
-	hookCmd := bin + " context"
+	hookCmd := "segments context"
 
 	sessionStart, _ := hooks["SessionStart"].([]interface{})
 	found := false
@@ -1495,6 +1502,38 @@ func writeMCPConfig(path, bin string) error {
 		servers = map[string]interface{}{}
 	}
 	servers["segments"] = mcpEntry(bin)
+	cfg["mcpServers"] = servers
+	out, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, append(out, '\n'), 0644)
+}
+
+func writeClaudeCodeMCP(scope installScope, path string) error {
+	if scope == scopeGlobal {
+		// Use claude's own CLI so we don't hand-edit the large shared ~/.claude.json.
+		// Remove first for idempotency; ignore failure if it wasn't registered.
+		exec.Command("claude", "mcp", "remove", "segments", "--scope", "user").Run()
+		out, err := exec.Command("claude", "mcp", "add", "--scope", "user", "segments", "segments", "mcp").CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("claude mcp add: %w: %s", err, strings.TrimSpace(string(out)))
+		}
+		return nil
+	}
+
+	cfg := map[string]interface{}{}
+	if data, err := os.ReadFile(path); err == nil {
+		json.Unmarshal(data, &cfg)
+	}
+	servers, _ := cfg["mcpServers"].(map[string]interface{})
+	if servers == nil {
+		servers = map[string]interface{}{}
+	}
+	servers["segments"] = map[string]interface{}{
+		"command": "segments",
+		"args":    []string{"mcp"},
+	}
 	cfg["mcpServers"] = servers
 	out, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
