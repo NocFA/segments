@@ -1,0 +1,424 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Segments — Three Directions</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600&family=Geist+Mono:wght@400;500&family=JetBrains+Mono:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+<style>
+  html, body { margin:0; padding:0; height:100%; overflow:hidden; background:#f0eee9; }
+  * { box-sizing: border-box; }
+  input::placeholder, textarea::placeholder { color:#999; }
+  /* Direction A */
+  .seg-pulse { animation: segPulse 1.4s ease-out; }
+  @keyframes segPulse { 0%{box-shadow: 0 0 0 0 rgba(122,167,217,0.55);} 100%{box-shadow: 0 0 0 8px rgba(122,167,217,0);} }
+  .seg-enter { animation: segSlideIn 420ms cubic-bezier(.2,.7,.2,1); }
+  @keyframes segSlideIn { 0%{opacity:0; transform:translateY(-6px); background:rgba(122,167,217,0.08);} 100%{opacity:1; background:transparent;} }
+  .seg-agent-dot { animation: segDot 1.6s ease-in-out infinite; }
+  @keyframes segDot { 0%,100%{opacity:0.5} 50%{opacity:1} }
+  /* Direction B */
+  .seg-blink { animation: segBlink 1.1s steps(2,end) infinite; }
+  @keyframes segBlink { 0%,49%{opacity:1} 50%,100%{opacity:0.15} }
+  .seg-pulse-b { animation: segPulseB 1.2s ease-out; }
+  @keyframes segPulseB { 0%{background: rgba(224,184,74,0.25);} 100%{background: transparent;} }
+  .seg-enter-b { animation: segEnterB 500ms cubic-bezier(.2,.7,.2,1); }
+  @keyframes segEnterB { 0%{opacity:0; transform:translateX(-8px); background:rgba(143,198,107,0.1);} 100%{opacity:1; background:transparent;} }
+  /* Direction C */
+  .seg-blink-c { animation: segBlinkC 1.4s ease-in-out infinite; }
+  @keyframes segBlinkC { 0%,100%{opacity:0.4} 50%{opacity:1} }
+  .seg-pulse-c { animation: segPulseC 1.4s ease-out; }
+  @keyframes segPulseC { 0%{background:rgba(168,41,31,0.1); box-shadow:0 0 0 0 rgba(168,41,31,0.3);} 100%{background:transparent; box-shadow:0 0 0 12px rgba(168,41,31,0);} }
+  .seg-enter-c { animation: segEnterC 560ms cubic-bezier(.2,.7,.2,1); }
+  @keyframes segEnterC { 0%{opacity:0; transform:translateY(-8px); background:rgba(168,41,31,0.06);} 100%{opacity:1; background:transparent;} }
+  /* Artboards */
+  .seg-frame {
+    background:#fff; border-radius:3px; overflow:hidden;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08), 0 8px 24px rgba(0,0,0,0.1);
+    position: relative;
+  }
+  .seg-frame-inner { width:100%; height:100%; overflow:hidden; }
+  .seg-frame-inner > div { height:100% !important; width:100% !important; }
+  *::-webkit-scrollbar { width:8px; height:8px; }
+  *::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.2); border-radius:4px; }
+  *::-webkit-scrollbar-track { background: transparent; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script src="shared/seed.js"></script>
+<script type="text/babel" src="design-canvas.jsx"></script>
+<script type="text/babel" src="shared/direction-a-components.jsx"></script>
+<script type="text/babel" src="direction-a-app.jsx"></script>
+<script type="text/babel" src="direction-b-app.jsx"></script>
+<script type="text/babel" src="direction-c-app.jsx"></script>
+
+<script type="text/babel">
+const { useState, useMemo, useEffect, useRef } = React;
+
+/* Frame — wraps one of the SegmentsX apps at a given internal viewport,
+   then scales down so the whole viewport fits inside `width` × `height`. */
+function Frame({ App, internalW=1440, internalH=900, width=720, height=450, bg, label }) {
+  const scale = Math.min(width/internalW, height/internalH);
+  return (
+    <div style={{ position:'relative' }}>
+      <div style={{
+        width, height,
+        background: bg || '#fff',
+        borderRadius: 4,
+        overflow: 'hidden',
+        boxShadow: '0 1px 3px rgba(0,0,0,0.08), 0 8px 28px rgba(0,0,0,0.12)',
+        position: 'relative',
+      }}>
+        <div style={{
+          width: internalW, height: internalH,
+          transformOrigin: '0 0',
+          transform: `scale(${scale})`,
+          position: 'absolute', top:0, left:0,
+        }}>
+          <App/>
+        </div>
+      </div>
+      {label && (
+        <div style={{
+          position:'absolute', top: 8, right: 12,
+          fontSize: 10, letterSpacing:1, color: 'rgba(255,255,255,0.9)',
+          background: 'rgba(0,0,0,0.5)', padding:'2px 8px', borderRadius:2,
+          fontFamily:'"Geist Mono", monospace', textTransform:'uppercase',
+          pointerEvents:'none',
+        }}>{label}</div>
+      )}
+    </div>
+  );
+}
+
+/* A static preview of list rows for the tokens / spec cards */
+function Swatch({ color, label, note }) {
+  return (
+    <div style={{ display:'flex', alignItems:'center', gap:10, fontSize:11 }}>
+      <div style={{ width:22, height:22, background:color, border:'1px solid rgba(0,0,0,0.1)', borderRadius:3 }}/>
+      <div>
+        <div style={{ color:'#222', fontWeight:500 }}>{label}</div>
+        <div style={{ color:'#999', fontFamily:'"Geist Mono", monospace', fontSize:10 }}>{note}</div>
+      </div>
+    </div>
+  );
+}
+
+function SpecCard({ title, subtitle, children, width=720, bg='#fff' }) {
+  return (
+    <div style={{
+      width, background: bg, borderRadius:3, padding:'20px 24px',
+      boxShadow:'0 1px 3px rgba(0,0,0,0.08), 0 4px 16px rgba(0,0,0,0.06)',
+      fontFamily:'-apple-system, system-ui, sans-serif',
+    }}>
+      <div style={{ fontSize:13, fontWeight:600, color:'#222', marginBottom:2 }}>{title}</div>
+      <div style={{ fontSize:11, color:'#888', marginBottom:14 }}>{subtitle}</div>
+      {children}
+    </div>
+  );
+}
+
+function BriefCard() {
+  return (
+    <div style={{
+      width: 560, padding: '32px 36px',
+      background: '#fffefb',
+      boxShadow: '0 1px 3px rgba(0,0,0,0.08), 0 8px 28px rgba(0,0,0,0.08)',
+      fontFamily: '-apple-system, system-ui, sans-serif',
+      color: '#2a2a28',
+    }}>
+      <div style={{ fontSize: 11, letterSpacing: 2, color:'#999', textTransform:'uppercase', marginBottom: 8 }}>
+        Segments · Design Brief
+      </div>
+      <h1 style={{
+        fontFamily:'"Instrument Serif", serif',
+        fontSize: 44, lineHeight: 1.0, margin:'0 0 14px', letterSpacing:-0.8, fontWeight:400,
+      }}>
+        A spectator console for<br/>
+        <em>you and your agent.</em>
+      </h1>
+      <p style={{ fontSize: 13.5, lineHeight: 1.55, color:'#55534f', margin:'0 0 14px' }}>
+        One developer, watching their coding agent write, update, and finish tasks in
+        real time. No team, no auth. Local-first. Reads are spectator; writes are mostly
+        the agent via API.
+      </p>
+      <p style={{ fontSize: 13.5, lineHeight: 1.55, color:'#55534f', margin:'0 0 20px' }}>
+        The current UI is a dense, always-expanded table with no dates, sort, filter,
+        search, kanban, or dependency rendering. These three directions each commit
+        to a stance on how the spectator experience should feel.
+      </p>
+      <div style={{ fontSize: 11.5, lineHeight:1.7, color:'#444', display:'grid', gridTemplateColumns:'92px 1fr', rowGap:8, columnGap:14 }}>
+        <strong>Shared DNA</strong>
+        <span>22 realistic dev tasks · DAG of blockers · 5 statuses · 4 priorities · keyboard-first · ws-driven agent sim pulsing every ~5s</span>
+        <strong>Views</strong>
+        <span>List (dense), Kanban (drag-drop), Graph (topological DAG with "ready" highlight). All three live inside each prototype.</span>
+        <strong>Encoding</strong>
+        <span>Each direction reinvents status, priority, and blocker chips — same data, different vocabulary.</span>
+        <strong>Interactions</strong>
+        <span>j/k, c, e, /, t, 1-4, g then k/l/g, ⌘K palette, esc. Live agent pulses, slides new rows in, flips statuses.</span>
+      </div>
+    </div>
+  );
+}
+
+/* Token spec cards per direction */
+function TokensA() {
+  const t = A_TOK.dark;
+  return (
+    <SpecCard title="Direction A — Obsidian" subtitle="Refined dark, single steel accent, hairline dividers, restrained motion">
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:16, fontSize:11 }}>
+        <div>
+          <div style={{ color:'#888', marginBottom:8, fontSize:10, letterSpacing:1, textTransform:'uppercase' }}>Palette</div>
+          <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+            <Swatch color={t.bg}        label="bg"       note="#0e1012"/>
+            <Swatch color={t.surface}   label="surface"  note="#16181b"/>
+            <Swatch color={t.text}      label="fg"       note="#e7e5e2"/>
+            <Swatch color={t.accent}    label="accent"   note="steel · #7aa7d9"/>
+            <Swatch color={t.blocker}   label="blocker"  note="#d97a7a"/>
+            <Swatch color={t.done}      label="done"     note="#7ac28a"/>
+          </div>
+        </div>
+        <div>
+          <div style={{ color:'#888', marginBottom:8, fontSize:10, letterSpacing:1, textTransform:'uppercase' }}>Type · Encoding</div>
+          <div style={{ fontSize:11.5, lineHeight:1.7, color:'#333' }}>
+            <div><strong>Body:</strong> Geist 13px / 1.4</div>
+            <div><strong>Mono:</strong> Geist Mono 10.5–11px for IDs + times</div>
+            <div style={{ marginTop:8 }}><strong>Status:</strong> filled/hollow dot glyph + label, 11.5px</div>
+            <div><strong>Priority:</strong> 4-bar mini-bar chart, color intensifies with urgency</div>
+            <div><strong>Blocker:</strong> outlined chip, red if unresolved, gray ✓ if met</div>
+            <div><strong>Density:</strong> 38px rows · 9×16px padding · hairline 1px dividers</div>
+            <div><strong>Motion:</strong> 140ms ease-out pulses, slide-in on create</div>
+          </div>
+        </div>
+      </div>
+    </SpecCard>
+  );
+}
+
+function TokensB() {
+  const t = B_TOK.dark;
+  return (
+    <SpecCard title="Direction B — Console" subtitle="Monospace-dominant, amber/green phosphor, info-dense, no scanlines">
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:16, fontSize:11 }}>
+        <div>
+          <div style={{ color:'#888', marginBottom:8, fontSize:10, letterSpacing:1, textTransform:'uppercase' }}>Palette</div>
+          <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+            <Swatch color={t.bg}      label="bg"       note="#0a0b08 · warm black"/>
+            <Swatch color={t.surface} label="surface"  note="#10110d"/>
+            <Swatch color={t.text}    label="fg"       note="#d7c89a · parchment"/>
+            <Swatch color={t.amber}   label="amber"    note="#e0b84a · primary"/>
+            <Swatch color={t.green}   label="green"    note="#8fc66b · ok/ready"/>
+            <Swatch color={t.red}     label="red"      note="#e06a4a · held"/>
+          </div>
+        </div>
+        <div>
+          <div style={{ color:'#888', marginBottom:8, fontSize:10, letterSpacing:1, textTransform:'uppercase' }}>Type · Encoding</div>
+          <div style={{ fontSize:11.5, lineHeight:1.7, color:'#333' }}>
+            <div><strong>Body:</strong> IBM Plex Mono 12px</div>
+            <div><strong>UI chrome:</strong> JetBrains Mono 11px</div>
+            <div style={{ marginTop:8 }}><strong>Status:</strong> bracketed ASCII — [ ] [~] [!] [x] [/]</div>
+            <div><strong>Priority:</strong> `!!!`, `!!`, `!`, `·` bangs, color by urgency</div>
+            <div><strong>Blocker:</strong> ⊘SEG-310 red / ✓SEG-104 green inline, no chrome</div>
+            <div><strong>Density:</strong> 28px rows, dashed section rules, running tail log sidebar</div>
+            <div><strong>Motion:</strong> typewriter blink on cursor, ascii-tint enter</div>
+          </div>
+        </div>
+      </div>
+    </SpecCard>
+  );
+}
+
+function TokensC() {
+  const t = C_TOK.light;
+  return (
+    <SpecCard title="Direction C — Dossier" subtitle="Editorial / brutalist. Paper & ink, serif display, oversized numerals">
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:16, fontSize:11 }}>
+        <div>
+          <div style={{ color:'#888', marginBottom:8, fontSize:10, letterSpacing:1, textTransform:'uppercase' }}>Palette</div>
+          <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+            <Swatch color={t.bg}       label="paper"    note="#efece4"/>
+            <Swatch color={t.paper}    label="inset"    note="#f8f5ec"/>
+            <Swatch color={t.ink}      label="ink"      note="#161312"/>
+            <Swatch color={t.stampRed} label="stamp"    note="#a8291f · held/urgent"/>
+            <Swatch color={t.moss}     label="moss"     note="#3a5a2e · settled"/>
+            <Swatch color={t.ochre}    label="ochre"    note="#8a6a1a · in course"/>
+          </div>
+        </div>
+        <div>
+          <div style={{ color:'#888', marginBottom:8, fontSize:10, letterSpacing:1, textTransform:'uppercase' }}>Type · Encoding</div>
+          <div style={{ fontSize:11.5, lineHeight:1.7, color:'#333' }}>
+            <div><strong>Display:</strong> Instrument Serif 17–44px, italics for section cues</div>
+            <div><strong>Body:</strong> Space Grotesk 11–13px for metadata + chrome</div>
+            <div style={{ marginTop:8 }}><strong>Status:</strong> ornament glyph + caps label (IN COURSE, ON HOLD…)</div>
+            <div><strong>Priority:</strong> roman numeral I / II / III / IV, italic serif</div>
+            <div><strong>Blocker:</strong> rotated rubber-stamp chip "HELD BY SEG-310"</div>
+            <div><strong>Density:</strong> 60px rows, № counter, drop-cap first letter in detail</div>
+            <div><strong>Motion:</strong> stamp-pulse, 560ms slide-in, serif blur on enter</div>
+          </div>
+        </div>
+      </div>
+    </SpecCard>
+  );
+}
+
+function DiffCard() {
+  return (
+    <SpecCard title="How the three differ at a glance" subtitle="Same data, same shortcuts, same sim — different vocabulary" width={2016}>
+      <div style={{ display:'grid', gridTemplateColumns:'120px repeat(3, 1fr)', gap:0, fontSize:12, color:'#222' }}>
+        {['', 'A · Obsidian', 'B · Console', 'C · Dossier'].map((h,i) => (
+          <div key={i} style={{
+            padding:'10px 14px', background:'#f6f5f2', fontWeight: i?600:400,
+            borderBottom:'1px solid #ddd',
+          }}>{h}</div>
+        ))}
+        {[
+          ['Status', '● ◐ ◉ ⊘ — dots', '[ ] [~] [!] [x] [/] — brackets', '◇ ◈ ◆ ❖ ▫ — ornaments + caps'],
+          ['Priority', '■■■□ mini-bars, red→gray', '!!! !! ! · bangs', 'I · II · III · IV roman'],
+          ['Blocker', 'outlined chip · red×/gray✓', '⊘SEG-310 / ✓SEG-104 inline', 'rotated "HELD BY" stamp'],
+          ['Type', 'Geist · Geist Mono', 'IBM Plex Mono · JetBrains Mono', 'Instrument Serif · Space Grotesk'],
+          ['Density', 'compact · 38px row', 'tight · 28px row + tail log', 'spacious · 60px row · serif'],
+          ['Feel', 'spectator that disappears', 'operator shell, agent tail', 'ledger of record, archival'],
+        ].map((row,ri) => (
+          row.map((c,ci) => (
+            <div key={ri+'-'+ci} style={{
+              padding:'9px 14px', borderBottom:'1px solid #eee',
+              color: ci===0 ? '#888' : '#222',
+              fontWeight: ci===0 ? 500 : 400, fontSize: 11.5,
+              fontFamily: ci===0 ? '-apple-system, system-ui, sans-serif' :
+                (ri===0||ri===2) ? 'inherit' :
+                'inherit',
+            }}>{c}</div>
+          ))
+        )).flat()}
+      </div>
+    </SpecCard>
+  );
+}
+
+/* Main canvas */
+function Canvas() {
+  return (
+    <DesignCanvas>
+      {/* Brief */}
+      <div style={{ padding:'0 60px 60px' }}>
+        <BriefCard/>
+      </div>
+
+      {/* Direction A */}
+      <DCSection
+        title="A · Obsidian"
+        subtitle="Linear-clean. High contrast near-black, single cool-steel accent, hairline 1px dividers. Interactive. Try j/k, ⌘K, press c. Click the top-bar moon to flip to light."
+      >
+        <DCArtboard label="List view · dark · full app" width={1100} height={720}>
+          <Frame App={SegmentsA} internalW={1440} internalH={900} width={1100} height={720} bg="#0e1012"/>
+        </DCArtboard>
+        <div style={{ display:'flex', flexDirection:'column', gap:36, paddingTop:0 }}>
+          <TokensA/>
+          <SpecCard title="Spacing · Shortcuts · Live sim" subtitle="Interaction notes for Direction A">
+            <div style={{ fontSize:11.5, lineHeight:1.7, color:'#333' }}>
+              <strong>Scale:</strong> 4px base · rows 38px · section label 11px UPPERCASE / 0.5 letter-spacing<br/>
+              <strong>Surfaces:</strong> bg · surface · surface2 (3-tier) + 2 hairline lines<br/>
+              <strong>Selection:</strong> 2px left rail in accent + surface2 bg<br/>
+              <strong>Agent sim:</strong> every ~5s a real mutation — todo→wip, wip→done, or a new row slides in. Steel-blue ring pulses 1.4s.<br/>
+              <strong>Keyboard:</strong> j/k · enter · c · e · / · t · 1-4 · g k/l/g · esc · ⌘K
+            </div>
+          </SpecCard>
+        </div>
+      </DCSection>
+
+      {/* Direction B */}
+      <DCSection
+        title="B · Console"
+        subtitle="Terminal-futuristic. Warm black, amber + phosphor green, live agent tail log in the sidebar. Monospace-dominant, info-dense."
+      >
+        <DCArtboard label="List + agent tail · dark" width={1100} height={720}>
+          <Frame App={SegmentsB} internalW={1440} internalH={900} width={1100} height={720} bg="#0a0b08"/>
+        </DCArtboard>
+        <div style={{ display:'flex', flexDirection:'column', gap:36 }}>
+          <TokensB/>
+          <SpecCard title="Layout · Tail log · Ascii DAG" subtitle="Interaction notes for Direction B">
+            <div style={{ fontSize:11.5, lineHeight:1.7, color:'#333' }}>
+              <strong>Scale:</strong> 2px base — 28px rows, 2px padding between columns<br/>
+              <strong>Top strip:</strong> prompt `segments ~/dev/segments $ _` · blinking cursor · status tally strip (tasks · [~] 5 · [!] 1 · ready 5)<br/>
+              <strong>Sidebar:</strong> agent tail log — last ~12 mutations with timestamp + msg, opacity-ramp for age<br/>
+              <strong>Graph:</strong> orthogonal routing, dashed edges for resolved deps, solid red for unresolved<br/>
+              <strong>Density win:</strong> ~30% more rows visible than A at same viewport
+            </div>
+          </SpecCard>
+        </div>
+      </DCSection>
+
+      {/* Direction C */}
+      <DCSection
+        title="C · Dossier"
+        subtitle="Editorial / brutalist. Paper & ink, serif display, rubber-stamp accents. Slower, calmer, more considered — the ledger of record rather than the live feed."
+      >
+        <DCArtboard label="List view · light · masthead" width={1100} height={720}>
+          <Frame App={SegmentsC} internalW={1440} internalH={900} width={1100} height={720} bg="#efece4"/>
+        </DCArtboard>
+        <div style={{ display:'flex', flexDirection:'column', gap:36 }}>
+          <TokensC/>
+          <SpecCard title="Voice · Masthead · Stamp vocabulary" subtitle="Interaction notes for Direction C">
+            <div style={{ fontSize:11.5, lineHeight:1.7, color:'#333' }}>
+              <strong>Masthead:</strong> Vol. No. date · serif display wordmark with an italic tagline<br/>
+              <strong>Voice:</strong> "in course / on hold / settled / withdrawn" instead of todo/blocker/done/closed<br/>
+              <strong>Stamps:</strong> rotated red rubber-stamp chip for held blockers, "HELD" stamp in detail when blocker<br/>
+              <strong>Numerals:</strong> № 01-22 entry counter, roman-numeral priority, drop-cap first letter on description<br/>
+              <strong>Tradeoff:</strong> lowest density — but the most confidence-inspiring when the agent does something you did not expect
+            </div>
+          </SpecCard>
+        </div>
+      </DCSection>
+
+      {/* At-a-glance comparison */}
+      <DCSection
+        title="Comparison"
+        subtitle="Same data, same shortcuts, same agent sim — different vocabulary"
+      >
+        <DiffCard/>
+      </DCSection>
+
+      {/* Stand-alone launches */}
+      <DCSection title="Open in full-viewport" subtitle="Links below open each prototype at its native size">
+        <div style={{
+          display:'flex', gap:16, fontSize:12, color:'#444',
+          fontFamily:'-apple-system, system-ui, sans-serif',
+        }}>
+          <a href="Segments - A Obsidian.html" style={{
+            padding:'10px 16px', background:'#0e1012', color:'#e7e5e2',
+            textDecoration:'none', borderRadius:3, fontFamily:'Geist, sans-serif',
+          }}>↗ A · Obsidian</a>
+          <a href="Segments - B Console.html" style={{
+            padding:'10px 16px', background:'#0a0b08', color:'#e0b84a',
+            textDecoration:'none', borderRadius:0, fontFamily:'"JetBrains Mono", monospace',
+            border:'1px solid #e0b84a',
+          }}>$ open B · Console</a>
+          <a href="Segments - C Dossier.html" style={{
+            padding:'10px 16px', background:'#efece4', color:'#161312',
+            textDecoration:'none', borderRadius:0, fontFamily:'"Instrument Serif", serif',
+            fontSize:15, fontStyle:'italic',
+            border:'1.5px solid #161312',
+          }}>→ C · Dossier</a>
+        </div>
+        <DCPostIt top={-20} left={500} rotate={-4} width={200}>
+          Each prototype has all three views<br/>
+          (list / kanban / graph) and<br/>
+          dark + light toggle.<br/>
+          Agent sim is live — toggle off<br/>
+          in the top bar if it's distracting.
+        </DCPostIt>
+      </DCSection>
+    </DesignCanvas>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<Canvas/>);
+</script>
+</body>
+</html>
