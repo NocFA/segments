@@ -1105,6 +1105,737 @@ body[data-theme="console"] .side-item:focus-visible {
   body[data-theme="console"] .row .status-pill { min-width: 0; }
   body[data-theme="console"] .status-pill .label { display: none; }
 }
+
+/* ===== Dossier theme (Direction C) ===== */
+body[data-theme="dossier"] {
+  --seg-bg: #efece4;
+  --seg-surface: #f8f5ec;
+  --seg-surface2: #e8e3d4;
+  --seg-line: rgba(22,19,18,0.5);
+  --seg-line2: rgba(22,19,18,0.18);
+  --seg-text: #161312;
+  --seg-text2: #2e2a27;
+  --seg-muted: #6d665c;
+  --seg-faint: #a49d8f;
+  --seg-accent: #a8291f;
+  --seg-accent-dim: rgba(168,41,31,0.14);
+  --seg-todo: #6d665c;
+  --seg-inprog: #8a6a1a;
+  --seg-blocker: #a8291f;
+  --seg-done: #3a5a2e;
+  --seg-closed: #a49d8f;
+  --seg-pri0: #a8291f;
+  --seg-pri1: #8a6a1a;
+  --seg-pri2: #1f3d6a;
+  --seg-pri3: #a49d8f;
+  --seg-font: "Space Grotesk", system-ui, sans-serif;
+  --seg-font-mono: "Space Grotesk", ui-monospace, monospace;
+  --seg-font-serif: "Instrument Serif", "Times New Roman", serif;
+  --seg-font-feature: normal;
+  --seg-glow: none;
+  --seg-rule: #161312;
+  --seg-rule2: #b3ac9e;
+  --seg-scroll: rgba(22,19,18,0.22);
+  --seg-scroll-hover: rgba(22,19,18,0.4);
+}
+body[data-theme="dossier"][data-mode="dark"] {
+  --seg-bg: #14110e;
+  --seg-surface: #1a1713;
+  --seg-surface2: #241f18;
+  --seg-line: rgba(234,226,208,0.22);
+  --seg-line2: rgba(234,226,208,0.10);
+  --seg-text: #eae2d0;
+  --seg-text2: #c8bfa9;
+  --seg-muted: #8f8775;
+  --seg-faint: #5a5447;
+  --seg-accent: #d9604f;
+  --seg-accent-dim: rgba(217,96,79,0.18);
+  --seg-todo: #8f8775;
+  --seg-inprog: #d9a650;
+  --seg-blocker: #d9604f;
+  --seg-done: #8cb56f;
+  --seg-closed: #5a5447;
+  --seg-pri0: #d9604f;
+  --seg-pri1: #d9a650;
+  --seg-pri2: #7aa7d9;
+  --seg-pri3: #5a5447;
+  --seg-rule: #6f675a;
+  --seg-rule2: rgba(234,226,208,0.12);
+  --seg-scroll: rgba(234,226,208,0.22);
+  --seg-scroll-hover: rgba(234,226,208,0.4);
+}
+
+body[data-theme="dossier"] .app {
+  height: 100vh; width: 100vw; display: flex; flex-direction: column; overflow: hidden;
+}
+
+/* topbar: masthead + stats + controls */
+body[data-theme="dossier"] .topbar {
+  border-bottom: 2px solid var(--seg-rule);
+  background: var(--seg-bg);
+  flex-shrink: 0;
+}
+body[data-theme="dossier"] .dossier-masthead {
+  padding: 18px 24px 12px;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: end; gap: 16px;
+}
+body[data-theme="dossier"] .dossier-masthead .left,
+body[data-theme="dossier"] .dossier-masthead .right {
+  font-family: var(--seg-font);
+  font-size: 10px; letter-spacing: 3px;
+  text-transform: uppercase; color: var(--seg-muted);
+}
+body[data-theme="dossier"] .dossier-masthead .right {
+  display: flex; justify-content: flex-end; gap: 14px; align-items: center;
+  letter-spacing: 2px; flex-wrap: wrap;
+}
+body[data-theme="dossier"] .dossier-masthead .title {
+  font-family: var(--seg-font-serif);
+  font-size: 44px; line-height: 1; color: var(--seg-text);
+  letter-spacing: -1px; text-align: center;
+  white-space: nowrap;
+}
+body[data-theme="dossier"] .dossier-masthead .title .sub {
+  font-style: italic; font-size: 24px; color: var(--seg-muted);
+}
+body[data-theme="dossier"] .dossier-masthead .ver {
+  font-family: var(--seg-font); font-size: 10px;
+  color: var(--seg-faint); letter-spacing: 1px; margin-left: 6px;
+}
+
+body[data-theme="dossier"] .topbar-stats {
+  border-top: 1px solid var(--seg-rule);
+  padding: 6px 24px;
+  display: flex; gap: 14px;
+  font-family: var(--seg-font);
+  font-size: 10px; letter-spacing: 1px;
+  color: var(--seg-muted); text-transform: uppercase;
+  flex-wrap: wrap;
+}
+body[data-theme="dossier"] .topbar-stats strong { color: var(--seg-text); font-weight: 500; }
+body[data-theme="dossier"] .topbar-stats .stat-spacer { flex: 1; }
+body[data-theme="dossier"] .topbar-stats .c-blocker strong { color: var(--seg-blocker); }
+body[data-theme="dossier"] .topbar-stats .c-done strong    { color: var(--seg-done); }
+
+body[data-theme="dossier"] .topbar-controls {
+  border-top: 0.5px solid var(--seg-rule2);
+  padding: 10px 24px;
+  display: flex; gap: 14px; align-items: center;
+  flex-wrap: wrap;
+}
+
+body[data-theme="dossier"] .view-tabs {
+  display: flex; gap: 2px;
+}
+body[data-theme="dossier"] .view-tab {
+  padding: 6px 14px;
+  font-family: var(--seg-font-serif);
+  font-size: 16px; color: var(--seg-muted);
+  border-bottom: 2px solid transparent;
+}
+body[data-theme="dossier"] .view-tab .hint {
+  font-family: var(--seg-font); font-size: 9px; letter-spacing: 1px;
+  color: var(--seg-faint); margin-left: 4px;
+}
+body[data-theme="dossier"] .view-tab.active {
+  color: var(--seg-text); font-style: italic;
+  border-bottom-color: var(--seg-rule);
+}
+body[data-theme="dossier"] .view-tab[data-disabled] { opacity: 0.45; cursor: not-allowed; }
+
+body[data-theme="dossier"] .search-wrap {
+  flex: 1; display: flex; justify-content: flex-end;
+}
+body[data-theme="dossier"] .search {
+  display: flex; align-items: center; gap: 8px;
+  border-bottom: 1px solid var(--seg-rule);
+  padding: 3px 0; min-width: 240px; max-width: 380px; width: 100%;
+  font-family: var(--seg-font);
+}
+body[data-theme="dossier"] .search .icon {
+  font-size: 10px; letter-spacing: 2px; color: var(--seg-muted);
+  white-space: nowrap;
+}
+body[data-theme="dossier"] .search input {
+  flex: 1; font-size: 13px; color: var(--seg-text);
+  font-family: var(--seg-font); min-width: 0;
+}
+body[data-theme="dossier"] .search .slash { display: none; }
+
+body[data-theme="dossier"] .topbar-btn {
+  font-family: var(--seg-font); font-size: 10px; letter-spacing: 2px;
+  border: 1px solid var(--seg-rule); padding: 4px 8px;
+  color: var(--seg-text);
+}
+
+body[data-theme="dossier"] .agent-ind {
+  display: flex; align-items: center; gap: 6px;
+  font-family: var(--seg-font-serif); font-size: 13px;
+  font-style: italic; letter-spacing: 0;
+  color: var(--seg-muted); text-transform: none;
+}
+body[data-theme="dossier"] .agent-dot {
+  width: 6px; height: 6px; border-radius: 3px; background: var(--seg-faint);
+}
+body[data-theme="dossier"] .agent-ind.on { color: var(--seg-inprog); }
+body[data-theme="dossier"] .agent-ind.on .agent-dot {
+  background: var(--seg-inprog); animation: segInkFadeC 2.6s ease-in-out infinite;
+}
+
+body[data-theme="dossier"] .theme-select {
+  font-family: var(--seg-font-serif);
+  font-size: 14px; font-style: italic; letter-spacing: 0;
+  color: var(--seg-text);
+  border: none; border-bottom: 0.5px dotted var(--seg-rule2);
+  padding: 0 4px;
+  background: transparent; cursor: pointer;
+  text-transform: none;
+}
+body[data-theme="dossier"] .theme-select:hover { color: var(--seg-text); }
+body[data-theme="dossier"] .mode-btn {
+  font-family: var(--seg-font-serif);
+  font-size: 15px; font-style: italic; letter-spacing: 0;
+  color: var(--seg-muted);
+  border: none; border-bottom: 0.5px dotted var(--seg-rule2);
+  padding: 0 4px;
+  text-transform: none;
+}
+body[data-theme="dossier"] .mode-btn:hover { color: var(--seg-text); }
+
+/* sidebar */
+body[data-theme="dossier"] .main { display: flex; flex: 1; min-height: 0; }
+body[data-theme="dossier"] .sidebar {
+  width: 240px; border-right: 2px solid var(--seg-rule);
+  padding: 20px; flex-shrink: 0;
+  background: var(--seg-bg);
+  overflow-y: auto;
+  display: flex; flex-direction: column; gap: 2px;
+}
+body[data-theme="dossier"] .side-label {
+  font-family: var(--seg-font-serif);
+  font-style: italic; font-size: 13px;
+  color: var(--seg-muted); margin: 0 0 8px; letter-spacing: 0.2px;
+  display: flex; justify-content: space-between; align-items: center;
+}
+body[data-theme="dossier"] .side-label .add-btn {
+  color: var(--seg-faint); font-size: 16px; padding: 0 4px; line-height: 1;
+  font-family: var(--seg-font-serif);
+}
+body[data-theme="dossier"] .side-label .add-btn:hover { color: var(--seg-text); }
+
+body[data-theme="dossier"] .side-item {
+  width: 100%; padding: 6px 0;
+  font-family: var(--seg-font-serif);
+  font-size: 17px; color: var(--seg-muted);
+  border-bottom: 0.5px dashed var(--seg-rule2);
+  display: flex; justify-content: space-between; align-items: baseline;
+  text-align: left;
+}
+body[data-theme="dossier"] .side-item:hover { color: var(--seg-text); }
+body[data-theme="dossier"] .side-item.ready-active {
+  color: var(--seg-text); font-style: italic;
+}
+body[data-theme="dossier"] .side-item .pill {
+  font-family: var(--seg-font); font-size: 10px; color: var(--seg-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+body[data-theme="dossier"] .project-item {
+  width: 100%; padding: 6px 0;
+  border-bottom: 0.5px dashed var(--seg-rule2);
+  text-align: left;
+}
+body[data-theme="dossier"] .project-item:hover .project-name { color: var(--seg-text); }
+body[data-theme="dossier"] .project-row {
+  display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
+}
+body[data-theme="dossier"] .project-item .project-name {
+  font-family: var(--seg-font-serif); font-size: 17px;
+  color: var(--seg-text2);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+}
+body[data-theme="dossier"] .project-item.active .project-name {
+  color: var(--seg-text); font-style: italic;
+}
+body[data-theme="dossier"] .project-item .project-count {
+  font-family: var(--seg-font); font-size: 10px; color: var(--seg-muted);
+  font-variant-numeric: tabular-nums;
+}
+body[data-theme="dossier"] .project-ornaments {
+  display: flex; gap: 6px; margin-top: 3px; flex-wrap: wrap;
+  font-family: var(--seg-font); font-size: 9px; letter-spacing: 1px;
+  color: var(--seg-muted); text-transform: uppercase;
+}
+body[data-theme="dossier"] .project-ornaments .c-blocker { color: var(--seg-blocker); }
+body[data-theme="dossier"] .project-ornaments .c-done    { color: var(--seg-done); }
+body[data-theme="dossier"] .project-ornaments .c-inprog  { color: var(--seg-inprog); }
+
+body[data-theme="dossier"] .ready-box {
+  margin-top: 20px; padding: 12px 14px;
+  border: 1.5px solid var(--seg-blocker);
+  transform: rotate(-1deg);
+  background: var(--seg-bg);
+  text-align: left;
+}
+body[data-theme="dossier"] .ready-box.active {
+  background: var(--seg-accent-dim);
+}
+body[data-theme="dossier"] .ready-box .label {
+  font-family: var(--seg-font); font-size: 9px; letter-spacing: 2px;
+  color: var(--seg-blocker); font-weight: 600;
+}
+body[data-theme="dossier"] .ready-box .num {
+  font-family: var(--seg-font-serif);
+  font-size: 36px; color: var(--seg-blocker); line-height: 1; margin-top: 4px;
+  font-style: italic;
+}
+body[data-theme="dossier"] .ready-box .sub {
+  font-family: var(--seg-font); font-size: 10px;
+  color: var(--seg-muted); margin-top: 4px; letter-spacing: 0.3px;
+}
+
+body[data-theme="dossier"] .side-shortcuts {
+  margin-top: auto; padding-top: 20px;
+  font-family: var(--seg-font);
+  font-size: 9.5px; color: var(--seg-muted);
+  line-height: 1.8; letter-spacing: 0.5px;
+}
+body[data-theme="dossier"] .side-shortcuts .title {
+  color: var(--seg-text); margin-bottom: 4px;
+  letter-spacing: 1px; text-transform: uppercase;
+}
+
+/* content + composer */
+body[data-theme="dossier"] .content {
+  flex: 1; display: flex; flex-direction: column; min-width: 0; position: relative;
+}
+body[data-theme="dossier"] .composer {
+  border-bottom: 1px solid var(--seg-rule);
+  background: var(--seg-surface);
+  padding: 18px 24px;
+}
+body[data-theme="dossier"] .composer-header {
+  font-family: var(--seg-font); font-size: 9px; letter-spacing: 3px;
+  color: var(--seg-muted); text-transform: uppercase; margin-bottom: 6px;
+}
+body[data-theme="dossier"] .composer-title {
+  width: 100%;
+  font-family: var(--seg-font-serif); font-size: 22px;
+  color: var(--seg-text); letter-spacing: -0.2px;
+}
+body[data-theme="dossier"] .composer-body {
+  width: 100%; resize: none; padding: 0;
+  font-family: var(--seg-font-serif); font-size: 14px;
+  color: var(--seg-muted); line-height: 1.5; min-height: 40px;
+  margin-top: 6px; background: transparent;
+}
+body[data-theme="dossier"] .composer-row {
+  display: flex; gap: 10px; align-items: center; margin-top: 8px;
+  font-family: var(--seg-font);
+  font-size: 10px; letter-spacing: 1px;
+  color: var(--seg-muted); text-transform: uppercase;
+  flex-wrap: wrap;
+}
+body[data-theme="dossier"] .composer-row .label { color: var(--seg-muted); }
+body[data-theme="dossier"] .pri-btn {
+  padding: 2px 8px;
+  border: 1px solid var(--seg-rule2);
+  color: var(--seg-muted);
+  font-family: var(--seg-font-serif); font-size: 13px; font-style: italic;
+  min-width: 22px;
+}
+body[data-theme="dossier"] .pri-btn.active {
+  border-color: var(--seg-rule); color: var(--seg-text);
+}
+body[data-theme="dossier"] .composer-hint {
+  flex: 1; text-align: right;
+  font-size: 10px; color: var(--seg-faint); letter-spacing: 0.5px;
+}
+body[data-theme="dossier"] .composer select {
+  font-family: var(--seg-font); font-size: 10px; letter-spacing: 1px;
+  color: var(--seg-muted);
+  border: 1px solid var(--seg-rule2); padding: 2px 6px;
+  background: var(--seg-surface); cursor: pointer;
+}
+body[data-theme="dossier"] .composer .blocker-select {
+  max-width: 180px; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* list */
+body[data-theme="dossier"] .list { flex: 1; overflow: auto; }
+body[data-theme="dossier"] .list-group-header {
+  padding: 22px 24px 8px;
+  font-family: var(--seg-font-serif);
+  font-size: 11px; letter-spacing: 3px; text-transform: uppercase;
+  color: var(--seg-muted);
+  border-bottom: 0.5px solid var(--seg-rule);
+  display: flex; justify-content: space-between; align-items: baseline;
+  background: var(--seg-bg);
+  position: sticky; top: 0; z-index: 1;
+}
+body[data-theme="dossier"] .list-group-header.g-in_progress { color: var(--seg-inprog); }
+body[data-theme="dossier"] .list-group-header.g-blocker     { color: var(--seg-blocker); }
+body[data-theme="dossier"] .list-group-header.g-done        { color: var(--seg-done); }
+body[data-theme="dossier"] .list-group-header.g-closed      { color: var(--seg-closed); }
+body[data-theme="dossier"] .list-group-header .glyph {
+  font-size: 14px; margin-right: 8px;
+}
+body[data-theme="dossier"] .list-group-header .n {
+  font-family: var(--seg-font); font-size: 10px; color: var(--seg-muted);
+  letter-spacing: 0.5px; text-transform: none;
+}
+
+body[data-theme="dossier"] .row {
+  display: grid;
+  grid-template-columns: 52px 38px 112px 1fr auto 84px;
+  gap: 16px; align-items: center;
+  padding: 14px 24px;
+  border-bottom: 0.5px solid var(--seg-rule2);
+  cursor: pointer; position: relative;
+}
+body[data-theme="dossier"] .row.selected { background: var(--seg-surface); }
+body[data-theme="dossier"] .row-num {
+  font-family: var(--seg-font-serif);
+  font-size: 13px; font-style: italic; color: var(--seg-faint);
+  font-variant-numeric: tabular-nums;
+}
+body[data-theme="dossier"] .pri-roman {
+  font-family: var(--seg-font-serif);
+  font-style: italic; font-weight: 400;
+  font-size: 22px; letter-spacing: 0.5px;
+  line-height: 1; min-width: 28px;
+  display: inline-block;
+}
+body[data-theme="dossier"] .pri-roman.p0 { color: var(--seg-pri0); }
+body[data-theme="dossier"] .pri-roman.p1 { color: var(--seg-pri1); }
+body[data-theme="dossier"] .pri-roman.p2 { color: var(--seg-pri2); }
+body[data-theme="dossier"] .pri-roman.p3 { color: var(--seg-pri3); }
+
+body[data-theme="dossier"] .status-pill {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-family: var(--seg-font);
+  font-size: 10px; letter-spacing: 2px; font-weight: 500;
+  text-transform: uppercase;
+}
+body[data-theme="dossier"] .status-pill .glyph { font-size: 12px; }
+body[data-theme="dossier"] .status-pill.s-todo        { color: var(--seg-todo); }
+body[data-theme="dossier"] .status-pill.s-in_progress { color: var(--seg-inprog); }
+body[data-theme="dossier"] .status-pill.s-blocker     { color: var(--seg-blocker); }
+body[data-theme="dossier"] .status-pill.s-done        { color: var(--seg-done); }
+body[data-theme="dossier"] .status-pill.s-closed      { color: var(--seg-closed); }
+
+body[data-theme="dossier"] .row-title-wrap { min-width: 0; }
+body[data-theme="dossier"] .row-title {
+  font-family: var(--seg-font-serif);
+  font-size: 17px; line-height: 1.25;
+  color: var(--seg-text);
+  font-weight: 400; letter-spacing: -0.2px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+body[data-theme="dossier"] .row.s-closed .row-title {
+  color: var(--seg-faint); text-decoration: line-through;
+}
+body[data-theme="dossier"] .row-body {
+  font-family: var(--seg-font);
+  font-size: 11.5px;
+  color: var(--seg-muted);
+  margin-top: 2px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+body[data-theme="dossier"] .blocker-chip {
+  font-family: var(--seg-font); font-size: 9.5px; font-weight: 600;
+  letter-spacing: 1.5px; white-space: nowrap;
+}
+body[data-theme="dossier"] .blocker-chip.unresolved {
+  color: var(--seg-blocker);
+  border: 1.5px solid var(--seg-blocker);
+  padding: 1px 5px; border-radius: 2px;
+  transform: rotate(-2deg);
+  display: inline-block;
+}
+body[data-theme="dossier"] .blocker-chip.resolved {
+  color: var(--seg-faint); font-size: 10px;
+}
+body[data-theme="dossier"] .row-time {
+  font-family: var(--seg-font);
+  font-size: 10.5px;
+  color: var(--seg-muted);
+  text-align: right; letter-spacing: 0.5px; text-transform: uppercase;
+}
+body[data-theme="dossier"] .row-time .id-line {
+  font-size: 9px; color: var(--seg-faint); text-transform: none;
+  letter-spacing: 0.3px;
+  overflow: hidden; text-overflow: ellipsis;
+}
+
+body[data-theme="dossier"] .empty {
+  padding: 80px 24px; text-align: center;
+  font-family: var(--seg-font-serif); font-style: italic;
+  font-size: 16px; color: var(--seg-faint);
+}
+
+/* detail panel */
+body[data-theme="dossier"] .detail {
+  width: 440px; flex-shrink: 0;
+  border-left: 2px solid var(--seg-rule);
+  background: var(--seg-bg); overflow: auto;
+  display: flex; flex-direction: column;
+}
+body[data-theme="dossier"] .detail-head {
+  padding: 14px 24px;
+  border-bottom: 0.5px solid var(--seg-rule2);
+  display: flex; justify-content: space-between; align-items: center;
+  font-family: var(--seg-font); font-size: 10px; letter-spacing: 2px;
+  color: var(--seg-muted); text-transform: uppercase; gap: 10px;
+}
+body[data-theme="dossier"] .detail-head .id {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  flex: 1; min-width: 0;
+}
+body[data-theme="dossier"] .detail-close {
+  color: var(--seg-text); font-size: 16px; padding: 0 4px;
+}
+body[data-theme="dossier"] .detail-title-wrap {
+  padding: 20px 24px 8px; position: relative;
+}
+body[data-theme="dossier"] .detail-title-meta {
+  display: flex; align-items: center; gap: 12px; margin-bottom: 10px;
+}
+body[data-theme="dossier"] .detail-title {
+  margin: 0;
+  font-family: var(--seg-font-serif);
+  font-size: 26px; font-weight: 400;
+  color: var(--seg-text);
+  line-height: 1.15; letter-spacing: -0.5px;
+  cursor: pointer;
+}
+body[data-theme="dossier"] .detail-title-input {
+  width: 100%;
+  font-family: var(--seg-font-serif);
+  font-size: 22px; color: var(--seg-text);
+  background: var(--seg-surface);
+  border: 1px solid var(--seg-rule2);
+  padding: 8px 10px;
+}
+body[data-theme="dossier"] .detail-stamp {
+  position: absolute; top: 20px; right: 24px;
+  border: 2px solid var(--seg-blocker);
+  padding: 4px 10px; transform: rotate(6deg);
+  font-family: var(--seg-font);
+  font-size: 10px; font-weight: 700;
+  color: var(--seg-blocker); letter-spacing: 2px;
+}
+body[data-theme="dossier"] .detail-meta {
+  padding: 14px 24px;
+  display: grid; grid-template-columns: 96px 1fr;
+  column-gap: 12px; row-gap: 6px;
+  border-top: 0.5px dashed var(--seg-rule2);
+  border-bottom: 0.5px dashed var(--seg-rule2);
+  font-family: var(--seg-font);
+  font-size: 10.5px; letter-spacing: 1px;
+  color: var(--seg-muted);
+}
+body[data-theme="dossier"] .detail-meta .label { text-transform: uppercase; }
+body[data-theme="dossier"] .detail-meta select {
+  color: var(--seg-text); cursor: pointer;
+  font-family: var(--seg-font); font-size: 11px; letter-spacing: 1px;
+  background: var(--seg-bg);
+}
+body[data-theme="dossier"] .detail-meta .val { color: var(--seg-text); }
+body[data-theme="dossier"] .detail-meta .val.mono { font-family: var(--seg-font); }
+
+body[data-theme="dossier"] .detail-body {
+  padding: 20px 24px;
+  font-family: var(--seg-font-serif);
+  font-size: 15px; line-height: 1.55;
+  color: var(--seg-text);
+  white-space: pre-wrap;
+}
+body[data-theme="dossier"] .detail-body.has-body::first-letter {
+  font-size: 44px; float: left; line-height: 0.9;
+  margin-right: 6px; margin-top: 6px;
+  font-family: var(--seg-font-serif); color: var(--seg-text);
+}
+body[data-theme="dossier"] .detail-body textarea {
+  width: 100%; min-height: 140px;
+  color: var(--seg-text);
+  font-family: var(--seg-font-serif);
+  font-size: 15px; line-height: 1.55;
+  resize: vertical;
+  background: var(--seg-surface);
+  border: 1px solid var(--seg-rule2);
+  padding: 10px;
+}
+body[data-theme="dossier"] .detail-body textarea:focus { border-color: var(--seg-rule); }
+
+body[data-theme="dossier"] .detail-rel {
+  padding: 16px 24px;
+  border-top: 0.5px solid var(--seg-rule);
+}
+body[data-theme="dossier"] .detail-rel .section-title {
+  font-family: var(--seg-font); font-size: 9.5px; letter-spacing: 2px;
+  color: var(--seg-muted); text-transform: uppercase; margin-bottom: 8px;
+}
+body[data-theme="dossier"] .detail-rel .rel-row {
+  padding: 6px 0; border-bottom: 0.5px dashed var(--seg-rule2);
+  display: grid; grid-template-columns: 108px 1fr auto;
+  gap: 10px; align-items: center;
+  cursor: pointer;
+}
+body[data-theme="dossier"] .detail-rel .rel-row:hover .rel-title { color: var(--seg-accent); }
+body[data-theme="dossier"] .detail-rel .rel-title {
+  font-family: var(--seg-font-serif); font-size: 14px; color: var(--seg-text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+body[data-theme="dossier"] .detail-rel .rel-id {
+  font-family: var(--seg-font); font-size: 9px; color: var(--seg-faint);
+  letter-spacing: 0.5px;
+}
+
+body[data-theme="dossier"] .detail-actions {
+  display: flex; gap: 8px; padding: 12px 24px;
+  border-top: 1px solid var(--seg-rule); margin-top: auto;
+}
+body[data-theme="dossier"] .detail-actions button {
+  padding: 4px 12px;
+  border: 1px solid var(--seg-rule2);
+  font-family: var(--seg-font);
+  font-size: 10px; letter-spacing: 2px;
+  color: var(--seg-muted); text-transform: uppercase;
+}
+body[data-theme="dossier"] .detail-actions button:hover {
+  color: var(--seg-text); border-color: var(--seg-rule);
+}
+body[data-theme="dossier"] .detail-actions .primary {
+  background: var(--seg-text); color: var(--seg-bg); border: none;
+  font-weight: 600;
+}
+body[data-theme="dossier"] .detail-actions .danger { color: var(--seg-blocker); }
+body[data-theme="dossier"] .detail-actions .danger:hover { border-color: var(--seg-blocker); }
+
+/* dialog */
+body[data-theme="dossier"] .dialog-backdrop {
+  position: fixed; inset: 0;
+  background: rgba(20,17,14,0.55); z-index: 200;
+  display: flex; align-items: flex-start; justify-content: center; padding-top: 120px;
+}
+body[data-theme="dossier"] .dialog {
+  background: var(--seg-bg);
+  border: 2px solid var(--seg-rule);
+  box-shadow: 12px 12px 0 rgba(22,19,18,0.18);
+  width: 480px; overflow: hidden;
+}
+body[data-theme="dossier"] .dialog h3 {
+  margin: 0; padding: 14px 20px;
+  font-family: var(--seg-font-serif); font-size: 22px;
+  color: var(--seg-text);
+  border-bottom: 0.5px solid var(--seg-rule2);
+  font-style: italic; font-weight: 400;
+}
+body[data-theme="dossier"] .dialog input {
+  width: 100%; padding: 14px 20px;
+  font-family: var(--seg-font-serif);
+  font-size: 18px; color: var(--seg-text);
+  border-bottom: 0.5px solid var(--seg-rule2);
+}
+body[data-theme="dossier"] .dialog .dialog-actions {
+  padding: 10px 20px;
+  display: flex; gap: 8px; justify-content: flex-end;
+}
+body[data-theme="dossier"] .dialog .dialog-actions button {
+  padding: 4px 12px; border: 1px solid var(--seg-rule2);
+  font-family: var(--seg-font);
+  font-size: 10px; letter-spacing: 2px;
+  color: var(--seg-muted); text-transform: uppercase;
+}
+body[data-theme="dossier"] .dialog .dialog-actions .primary {
+  background: var(--seg-text); color: var(--seg-bg); border: none;
+  font-weight: 600;
+}
+
+/* view stub */
+body[data-theme="dossier"] .view-stub {
+  flex: 1; display: flex; align-items: center; justify-content: center;
+  flex-direction: column; gap: 12px;
+  font-family: var(--seg-font-serif);
+  color: var(--seg-muted);
+}
+body[data-theme="dossier"] .view-stub .big {
+  font-size: 28px; color: var(--seg-text); font-style: italic; letter-spacing: -0.3px;
+}
+body[data-theme="dossier"] .view-stub .hint {
+  font-family: var(--seg-font); font-size: 10px; letter-spacing: 2px;
+  color: var(--seg-faint); text-transform: uppercase;
+}
+
+/* dossier animations */
+@keyframes segBlinkC { 0%,100% { opacity: 0.4; } 50% { opacity: 1; } }
+@keyframes segInkFadeC { 0%,100% { opacity: 0.55; } 50% { opacity: 1; } }
+@keyframes segPulseC {
+  0%   { background: rgba(168,41,31,0.12); box-shadow: 0 0 0 0 rgba(168,41,31,0.3); }
+  100% { background: transparent;          box-shadow: 0 0 0 12px rgba(168,41,31,0); }
+}
+@keyframes segEnterC {
+  0%   { opacity: 0; transform: translateY(-8px); background: rgba(168,41,31,0.08); }
+  100% { opacity: 1; transform: none; background: transparent; }
+}
+body[data-theme="dossier"] .seg-pulse { animation: segPulseC 1.4s ease-out; }
+body[data-theme="dossier"] .seg-enter { animation: segEnterC 560ms cubic-bezier(.2,.7,.2,1); }
+.seg-blink-c { animation: segBlinkC 1.4s ease-in-out infinite; }
+
+/* a11y focus */
+body[data-theme="dossier"] button:focus-visible,
+body[data-theme="dossier"] input:focus-visible,
+body[data-theme="dossier"] textarea:focus-visible,
+body[data-theme="dossier"] select:focus-visible,
+body[data-theme="dossier"] .row:focus-visible,
+body[data-theme="dossier"] .project-item:focus-visible,
+body[data-theme="dossier"] .side-item:focus-visible {
+  outline: 2px solid var(--seg-accent);
+  outline-offset: 2px;
+}
+
+/* responsive */
+@media (max-width: 1100px) {
+  body[data-theme="dossier"] .sidebar { width: 210px; padding: 16px; }
+  body[data-theme="dossier"] .detail { width: 380px; }
+  body[data-theme="dossier"] .search { min-width: 200px; }
+  body[data-theme="dossier"] .dossier-masthead .title { font-size: 36px; }
+  body[data-theme="dossier"] .dossier-masthead .title .sub { font-size: 18px; }
+  body[data-theme="dossier"] .view-tab .hint { display: none; }
+}
+@media (max-width: 900px) {
+  body[data-theme="dossier"] .sidebar { width: 180px; padding: 12px; }
+  body[data-theme="dossier"] .row {
+    grid-template-columns: 38px 28px 92px 1fr auto;
+    gap: 10px; padding: 10px 16px;
+  }
+  body[data-theme="dossier"] .blocker-chip { display: none; }
+  body[data-theme="dossier"] .detail {
+    position: absolute; right: 0; top: 0; bottom: 0;
+    width: min(440px, 100%); z-index: 50;
+    box-shadow: -12px 0 32px rgba(22,19,18,0.25);
+  }
+}
+@media (max-width: 720px) {
+  body[data-theme="dossier"] .sidebar { display: none; }
+  body[data-theme="dossier"] .dossier-masthead {
+    padding: 10px 16px; grid-template-columns: 1fr; text-align: center;
+  }
+  body[data-theme="dossier"] .dossier-masthead .left,
+  body[data-theme="dossier"] .dossier-masthead .right { display: none; }
+  body[data-theme="dossier"] .topbar-controls { flex-wrap: wrap; gap: 8px; padding: 10px 16px; }
+  body[data-theme="dossier"] .topbar-stats { padding: 6px 16px; font-size: 9px; }
+  body[data-theme="dossier"] .detail { width: 100%; }
+  body[data-theme="dossier"] .row {
+    grid-template-columns: 28px 1fr auto; gap: 8px;
+  }
+  body[data-theme="dossier"] .row-num,
+  body[data-theme="dossier"] .status-pill .label { display: none; }
+}
 </style>
 </head>
 <body data-theme="obsidian" data-mode="dark">
@@ -2116,6 +2847,337 @@ function conNewProjectDialog() {
     '<div class="dialog-actions">' +
       '<button data-act="close-new-project">cancel</button>' +
       '<button class="primary" data-act="confirm-new-project">create</button>' +
+    '</div>' +
+  '</div></div>';
+}
+
+// ===================================================================
+// Theme: Dossier (Direction C)
+// ===================================================================
+Themes.register('dossier', {
+  label: 'Dossier',
+  description: 'Editorial paper-and-ink, serif display, rubber-stamp accents.',
+  statusMeta: {
+    todo:        { label: 'To do',     glyph: '\u25C7' }, // ◇
+    in_progress: { label: 'In course', glyph: '\u25C8' }, // ◈
+    blocker:     { label: 'On hold',   glyph: '\u25C6' }, // ◆
+    done:        { label: 'Settled',   glyph: '\u2756' }, // ❖
+    closed:      { label: 'Withdrawn', glyph: '\u25AB' }, // ▫
+  },
+  render: renderDossier,
+});
+
+const DOS_ROMAN = ['I', 'II', 'III', 'IV'];
+
+function renderDossier() {
+  const T = Themes.get(Store.theme);
+  const tasks = filteredTasks();
+  const byId = tasksById();
+  const counts = Util.counts(Store.tasks);
+  const ready = Util.ready(Store.tasks);
+  const selected = Store.selectedId ? byId[Store.selectedId] : null;
+
+  return '<div class="app">' +
+    dosTopbar(T, counts, ready.length) +
+    '<div class="main">' +
+      dosSidebar(T, ready.length) +
+      '<div class="content">' +
+        (Store.composerOpen ? dosComposer(T) : '') +
+        dosMainView(T, tasks, byId) +
+      '</div>' +
+      (selected ? dosDetail(T, selected, byId) : '') +
+    '</div>' +
+    (Store.newProjectOpen ? dosNewProjectDialog() : '') +
+  '</div>';
+}
+
+function dosTopbar(T, counts, readyCount) {
+  const date = new Date().toISOString().slice(0, 10);
+  const total = counts.total || 0;
+  const tabs = [
+    { id: 'list',   label: 'List',    hint: 'gl', enabled: true },
+    { id: 'kanban', label: 'Board',   hint: 'gk', enabled: false },
+    { id: 'graph',  label: 'Lineage', hint: 'gg', enabled: false },
+  ];
+  return '<div class="topbar" role="banner">' +
+    '<div class="dossier-masthead">' +
+      '<div class="left">Vol. I \u00B7 No. ' + total + ' \u00B7 ' + date + '</div>' +
+      '<div class="title">Segments <span class="sub">\u2014 a register of work</span>' +
+        (Store.version ? '<span class="ver">v' + Util.esc(Store.version) + '</span>' : '') +
+      '</div>' +
+      '<div class="right">' +
+        '<span class="agent-ind ' + (Store.wsConnected ? 'on' : '') + '" role="status" aria-live="polite" title="' + (Store.wsConnected ? 'Live WebSocket connection' : 'Reconnecting\u2026') + '">' +
+          '<span class="agent-dot" aria-hidden="true"></span>' +
+          '<span>Agent ' + (Store.wsConnected ? 'Live' : 'Paused') + '</span>' +
+        '</span>' +
+        '<select class="theme-select" data-act="theme" aria-label="Theme">' +
+          Themes.list().map(k => '<option value="' + k + '"' + (k === Store.theme ? ' selected' : '') + '>' +
+            Util.esc(Themes.get(k).label || k) + '</option>').join('') +
+        '</select>' +
+        '<button class="mode-btn" data-act="toggle-mode" title="Toggle light/dark">' + (Store.mode === 'dark' ? 'day' : 'night') + '</button>' +
+      '</div>' +
+    '</div>' +
+    '<div class="topbar-stats" aria-label="Task counts">' +
+      '<span><strong>' + counts.in_progress + '</strong> in course</span>' +
+      '<span>\u00B7</span>' +
+      '<span class="c-blocker"><strong>' + counts.blocker + '</strong> on hold</span>' +
+      '<span>\u00B7</span>' +
+      '<span><strong>' + counts.todo + '</strong> outstanding</span>' +
+      '<span>\u00B7</span>' +
+      '<span class="c-done"><strong>' + counts.done + '</strong> settled</span>' +
+      '<span class="stat-spacer"></span>' +
+      '<span>ready \u00B7 <strong>' + readyCount + '</strong></span>' +
+    '</div>' +
+    '<div class="topbar-controls">' +
+      '<div class="view-tabs" role="tablist" aria-label="View mode">' +
+        tabs.map(t => '<button class="view-tab ' + (Store.view === t.id ? 'active' : '') + '"' +
+          ' role="tab" aria-selected="' + (Store.view === t.id ? 'true' : 'false') + '"' +
+          (t.enabled ? ' data-act="view" data-view="' + t.id + '"' : ' aria-disabled="true" data-disabled="1" title="coming soon"') + '>' +
+          Util.esc(t.label) + '<span class="hint">' + t.hint + '</span></button>').join('') +
+      '</div>' +
+      '<div class="search-wrap"><label class="search">' +
+        '<span class="icon" aria-hidden="true">SEARCH \u2014</span>' +
+        '<input type="text" placeholder="title, description, or id" aria-label="Search tasks" value="' + Util.esc(Store.search) + '" data-act="search">' +
+        '<span class="slash" aria-hidden="true"></span>' +
+      '</label></div>' +
+      '<button class="topbar-btn" data-act="palette" title="Command palette (coming soon)">\u2318K</button>' +
+    '</div>' +
+  '</div>';
+}
+
+function dosSidebar(T, readyCount) {
+  const projectsHtml = Store.projects.map(p => {
+    const ptasks = Store.tasks.filter(t => t.project_id === p.id);
+    const c = Util.counts(ptasks);
+    const active = Store.activeProjectId === p.id;
+    const ornaments = [];
+    if (c.in_progress) ornaments.push('<span class="c-inprog">\u25C8 ' + c.in_progress + '</span>');
+    if (c.blocker)     ornaments.push('<span class="c-blocker">\u25C6 ' + c.blocker + '</span>');
+    if (c.todo)        ornaments.push('<span>\u25C7 ' + c.todo + '</span>');
+    if (c.done)        ornaments.push('<span class="c-done">\u2756 ' + c.done + '</span>');
+    return '<button class="project-item ' + (active ? 'active' : '') + '" data-act="project" data-id="' + Util.esc(p.id) + '">' +
+      '<div class="project-row">' +
+        '<span class="project-name">' + (active ? '\u203A ' : '') + Util.esc(p.name) + '</span>' +
+        '<span class="project-count">' + ptasks.length + '</span>' +
+      '</div>' +
+      (ornaments.length ? '<div class="project-ornaments">' + ornaments.join('') + '</div>' : '') +
+    '</button>';
+  }).join('');
+
+  const readyActive = Store.filter === 'ready';
+  return '<aside class="sidebar" aria-label="Sidebar">' +
+    '<div class="side-label">' +
+      '<span>\u2014 Projects \u2014</span>' +
+      '<button class="add-btn" data-act="new-project" title="New project" aria-label="New project">+</button>' +
+    '</div>' +
+    '<div>' + projectsHtml + '</div>' +
+    '<button class="ready-box ' + (readyActive ? 'active' : '') + '" data-act="toggle-ready" title="Toggle ready filter" aria-pressed="' + (readyActive ? 'true' : 'false') + '">' +
+      '<div class="label">READY QUEUE</div>' +
+      '<div class="num">' + readyCount + '</div>' +
+      '<div class="sub">entries with no outstanding dependencies</div>' +
+    '</button>' +
+    '<div class="side-shortcuts">' +
+      '<div class="title">Keys</div>' +
+      '<div>j \u00B7 k navigate</div>' +
+      '<div>c compose \u00B7 e edit</div>' +
+      '<div>/ search \u00B7 esc close</div>' +
+      '<div>\u21B5 open task</div>' +
+    '</div>' +
+  '</aside>';
+}
+
+function dosComposer(T) {
+  const stagedPri = parseInt(app.dataset.composerPri || '2', 10);
+  const stagedBlk = Store.composerBlocker || '';
+  const blockerOpts = '<option value="">\u2014 none \u2014</option>' + Store.tasks.map(x =>
+    '<option value="' + Util.esc(x.id) + '"' + (x.id === stagedBlk ? ' selected' : '') + '>' +
+    Util.esc(Util.shortId(x.id, 8)) + ' \u2014 ' + Util.esc((x.title || '').slice(0, 40)) + '</option>').join('');
+  return '<div class="composer" role="form" aria-label="New task">' +
+    '<div class="composer-header">New Entry</div>' +
+    '<input class="composer-title" type="text" placeholder="subject of the work\u2026" aria-label="Title" data-act="composer-submit" value="' + Util.esc(Store.composerTitle || '') + '">' +
+    '<textarea class="composer-body" rows="2" placeholder="notes (optional)" aria-label="Description" data-act="composer-body">' + Util.esc(Store.composerBody || '') + '</textarea>' +
+    '<div class="composer-row">' +
+      '<span class="label">Priority</span>' +
+      [0, 1, 2, 3].map(p => {
+        const on = p === stagedPri;
+        return '<button class="pri-btn' + (on ? ' active' : '') + '" data-act="composer-pri" data-pri="' + p + '" aria-pressed="' + (on ? 'true' : 'false') + '" title="P' + p + '">' + DOS_ROMAN[p] + '</button>';
+      }).join('') +
+      '<span class="label" style="margin-left:12px">Blocker</span>' +
+      '<select class="blocker-select" data-act="composer-blocker" aria-label="Blocker">' + blockerOpts + '</select>' +
+      '<span class="composer-hint">\u21B5 submit \u00B7 esc discard</span>' +
+    '</div>' +
+  '</div>';
+}
+
+function dosMainView(T, tasks, byId) {
+  if (Store.view === 'kanban' || Store.view === 'graph') {
+    return '<div class="view-stub">' +
+      '<div class="big">' + (Store.view === 'kanban' ? 'Board' : 'Lineage') + '</div>' +
+      '<div class="hint">\u2014 coming in a follow-up \u2014</div>' +
+    '</div>';
+  }
+  return dosListView(T, tasks, byId);
+}
+
+function dosListView(T, tasks, byId) {
+  if (!tasks.length) {
+    return '<div class="list"><div class="empty">' +
+      (Store.activeProjectId
+        ? '\u2014 No entries' + (Store.search ? ' matching \u201C' + Util.esc(Store.search) + '\u201D' : '') + '. Press c to compose. \u2014'
+        : '\u2014 Select or create a project to get started. \u2014') +
+    '</div></div>';
+  }
+  const groups = groupedByStatus(tasks);
+  let runningIdx = 0;
+  return '<div class="list" role="grid" aria-label="Task list">' +
+    groups.map(g => {
+      const meta = T.statusMeta[g.key];
+      const label = meta ? meta.label.toUpperCase() : g.key.toUpperCase();
+      return '<div class="list-group" role="rowgroup">' +
+        '<div class="list-group-header g-' + g.key + '" role="row">' +
+          '<span>' +
+            '<span class="glyph" aria-hidden="true">' + (meta ? meta.glyph : '') + '</span>' + label +
+          '</span>' +
+          '<span class="n">' + g.items.length + ' ' + (g.items.length === 1 ? 'entry' : 'entries') + '</span>' +
+        '</div>' +
+        g.items.map(t => dosListRow(T, t, byId, runningIdx++)).join('') +
+      '</div>';
+    }).join('') +
+  '</div>';
+}
+
+function dosListRow(T, t, byId, idx) {
+  const meta = T.statusMeta[t.status];
+  const blocker = t.blocked_by ? byId[t.blocked_by] : null;
+  const unresolved = blocker && blocker.status !== 'done';
+  const body1 = Util.firstLine(t.body);
+  const selected = Store.selectedId === t.id;
+  const pulsing = Store.pulse[t.id] && Date.now() - Store.pulse[t.id] < 2000;
+  const entering = !!Store.entering[t.id];
+  const classes = ['row', 's-' + t.status];
+  if (selected) classes.push('selected');
+  if (pulsing) classes.push('seg-pulse');
+  if (entering) classes.push('seg-enter');
+
+  const priLabel = 'Priority P' + t.priority;
+
+  const blockerChip = t.blocked_by
+    ? (unresolved
+        ? '<span class="blocker-chip unresolved" role="gridcell" title="' + Util.esc(blocker ? blocker.title : t.blocked_by) + '">HELD BY ' + Util.esc(Util.shortId(t.blocked_by, 6)) + '</span>'
+        : '<span class="blocker-chip resolved" role="gridcell" title="' + Util.esc(blocker ? blocker.title : t.blocked_by) + '">\u2713 ' + Util.esc(Util.shortId(t.blocked_by, 6)) + '</span>')
+    : '<span role="gridcell"></span>';
+
+  const statusLabel = meta ? meta.label.toUpperCase() : t.status.toUpperCase();
+  return '<div class="' + classes.join(' ') + '" role="row" tabindex="0" aria-selected="' + (selected ? 'true' : 'false') + '" aria-label="' + Util.esc(statusLabel + ' \u00B7 ' + t.title) + '" data-act="select" data-id="' + Util.esc(t.id) + '">' +
+    '<span class="row-num" role="gridcell">N\u00BA ' + String(idx + 1).padStart(2, '0') + '</span>' +
+    '<span class="pri-roman p' + t.priority + '" role="gridcell" aria-label="' + priLabel + '">' + DOS_ROMAN[t.priority] + '</span>' +
+    '<span class="status-pill s-' + t.status + '" role="gridcell">' +
+      '<span class="glyph" aria-hidden="true">' + (meta ? meta.glyph : '') + '</span>' +
+      '<span class="label">' + statusLabel + '</span>' +
+    '</span>' +
+    '<div class="row-title-wrap" role="gridcell">' +
+      '<div class="row-title">' + Util.esc(t.title) + '</div>' +
+      (body1 ? '<div class="row-body">' + Util.esc(body1) + '</div>' : '') +
+    '</div>' +
+    blockerChip +
+    '<span class="row-time" role="gridcell">' +
+      '<div class="id-line" title="' + Util.esc(t.id) + '">' + Util.esc(Util.shortId(t.id, 8)) + '</div>' +
+      Util.esc(Util.relTime(t.updated_at)) +
+    '</span>' +
+  '</div>';
+}
+
+function dosDetail(T, task, byId) {
+  const proj = Store.projects.find(p => p.id === task.project_id);
+  const blocker = task.blocked_by ? byId[task.blocked_by] : null;
+  const dependents = Object.values(byId).filter(t => t.blocked_by === task.id);
+  const statusOpts = Object.keys(T.statusMeta).map(s =>
+    '<option value="' + s + '"' + (task.status === s ? ' selected' : '') + '>' +
+    T.statusMeta[s].label.toUpperCase() + '</option>').join('');
+  const blockerOpts = '<option value="">\u2014 none \u2014</option>' + Store.tasks.filter(x => x.id !== task.id).map(x =>
+    '<option value="' + Util.esc(x.id) + '"' + (task.blocked_by === x.id ? ' selected' : '') + '>' +
+    Util.esc(Util.shortId(x.id, 8)) + ' \u2014 ' + Util.esc((x.title || '').slice(0, 40)) + '</option>').join('');
+
+  const editing = Store.editingBody !== null || Store.editingTitle !== null;
+  const titleBlock = Store.editingTitle !== null
+    ? '<input class="detail-title-input" type="text" value="' + Util.esc(Store.editingTitle) + '" aria-label="Task title" data-act="detail-edit-title">'
+    : '<h2 class="detail-title" tabindex="0" role="button" aria-label="Edit title" data-act="edit-title">' + Util.esc(task.title) + '</h2>';
+
+  const hasBody = !!(task.body && task.body.trim());
+  const bodyBlock = Store.editingBody !== null
+    ? '<div class="detail-body"><textarea data-act="detail-edit-body">' + Util.esc(Store.editingBody) + '</textarea><div style="margin-top:6px;font-size:10px;color:var(--seg-faint);letter-spacing:1px;text-transform:uppercase">\u2318\u21B5 save \u00B7 esc cancel</div></div>'
+    : '<div class="detail-body' + (hasBody ? ' has-body' : '') + '" data-act="edit-body">' +
+        (hasBody ? Util.esc(task.body) : '<em style="color:var(--seg-faint)">No description on file. Click to add.</em>') +
+      '</div>';
+
+  return '<aside class="detail">' +
+    '<div class="detail-head">' +
+      '<span class="id">Entry / ' + Util.esc(proj ? proj.name : '\u2014') + ' / ' + Util.esc(Util.shortId(task.id, 12)) + '</span>' +
+      '<button class="detail-close" data-act="deselect" aria-label="Close">\u00D7</button>' +
+    '</div>' +
+    '<div class="detail-title-wrap">' +
+      '<div class="detail-title-meta">' +
+        '<span class="pri-roman p' + task.priority + '" aria-label="Priority P' + task.priority + '">' + DOS_ROMAN[task.priority] + '</span>' +
+        '<span class="status-pill s-' + task.status + '">' +
+          '<span class="glyph" aria-hidden="true">' + T.statusMeta[task.status].glyph + '</span>' +
+          '<span class="label">' + T.statusMeta[task.status].label.toUpperCase() + '</span>' +
+        '</span>' +
+      '</div>' +
+      titleBlock +
+      (task.status === 'blocker' ? '<div class="detail-stamp">HELD</div>' : '') +
+    '</div>' +
+    '<div class="detail-meta">' +
+      '<span class="label">Status</span>' +
+      '<span><select data-act="detail-status">' + statusOpts + '</select></span>' +
+      '<span class="label">Priority</span>' +
+      '<span><select data-act="detail-priority">' +
+        [0, 1, 2, 3].map(p => '<option value="' + p + '"' + (task.priority === p ? ' selected' : '') + '>' + DOS_ROMAN[p] + ' (P' + p + ')</option>').join('') +
+      '</select></span>' +
+      '<span class="label">Held by</span>' +
+      '<span><select data-act="detail-blocker">' + blockerOpts + '</select></span>' +
+      '<span class="label">Updated</span>' +
+      '<span class="val mono">' + Util.esc(Util.relTime(task.updated_at)) + '</span>' +
+      '<span class="label">Opened</span>' +
+      '<span class="val mono">' + Util.esc(Util.relTime(task.created_at)) + '</span>' +
+      (task.closed_at ? '<span class="label">Closed</span><span class="val mono">' + Util.esc(Util.relTime(task.closed_at)) + '</span>' : '') +
+    '</div>' +
+    bodyBlock +
+    (blocker || dependents.length ? '<div class="detail-rel">' +
+      (blocker ? '<div style="margin-bottom:14px"><div class="section-title">Held by</div>' +
+        '<div class="rel-row" data-act="select" data-id="' + Util.esc(blocker.id) + '">' +
+          '<span class="status-pill s-' + blocker.status + '">' +
+            '<span class="glyph">' + T.statusMeta[blocker.status].glyph + '</span>' +
+            '<span class="label">' + T.statusMeta[blocker.status].label.toUpperCase() + '</span>' +
+          '</span>' +
+          '<span class="rel-title">' + Util.esc(blocker.title) + '</span>' +
+          '<span class="rel-id">' + Util.esc(Util.shortId(blocker.id, 8)) + '</span>' +
+        '</div></div>' : '') +
+      (dependents.length ? '<div><div class="section-title">Holds up</div>' +
+        dependents.map(d => '<div class="rel-row" data-act="select" data-id="' + Util.esc(d.id) + '">' +
+          '<span class="status-pill s-' + d.status + '">' +
+            '<span class="glyph">' + T.statusMeta[d.status].glyph + '</span>' +
+            '<span class="label">' + T.statusMeta[d.status].label.toUpperCase() + '</span>' +
+          '</span>' +
+          '<span class="rel-title">' + Util.esc(d.title) + '</span>' +
+          '<span class="rel-id">' + Util.esc(Util.shortId(d.id, 8)) + '</span>' +
+        '</div>').join('') +
+      '</div>' : '') +
+    '</div>' : '') +
+    '<div class="detail-actions">' +
+      (editing
+        ? '<button class="primary" data-act="detail-save">Save</button><button data-act="detail-cancel">Cancel</button>'
+        : '<button class="danger" data-act="detail-delete">Delete</button>') +
+    '</div>' +
+  '</aside>';
+}
+
+function dosNewProjectDialog() {
+  return '<div class="dialog-backdrop" data-act="close-new-project-backdrop"><div class="dialog">' +
+    '<h3>New project</h3>' +
+    '<input type="text" placeholder="project name" data-act="new-project-input" autofocus>' +
+    '<div class="dialog-actions">' +
+      '<button data-act="close-new-project">Cancel</button>' +
+      '<button class="primary" data-act="confirm-new-project">Create</button>' +
     '</div>' +
   '</div></div>';
 }
