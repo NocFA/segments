@@ -23,6 +23,7 @@ type Config struct {
 	LogFile   string `yaml:"log_file" json:"log_file,omitempty"`
 	EnableMCP bool   `yaml:"enable_mcp" json:"enable_mcp,omitempty"`
 	Extension string `yaml:"extension" json:"extension,omitempty"`
+	Version   string `yaml:"-" json:"version,omitempty"`
 }
 
 type Server struct {
@@ -356,11 +357,12 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	cfg := map[string]interface{}{
-		"port":      s.config.Port,
-		"bind":      s.config.Bind,
-		"data_dir":  s.config.DataDir,
+		"port":       s.config.Port,
+		"bind":       s.config.Bind,
+		"data_dir":   s.config.DataDir,
 		"enable_mcp": s.config.EnableMCP,
-		"extension": s.config.Extension,
+		"extension":  s.config.Extension,
+		"version":    s.config.Version,
 	}
 	s.writeJSON(w, cfg)
 }

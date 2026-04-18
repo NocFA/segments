@@ -43,6 +43,8 @@ var dataDir = func() string {
 
 var pidFile = filepath.Join(dataDir, "pid")
 
+var buildVersion = "dev"
+
 func isTerminal() bool {
 	return isatty.IsTerminal(os.Stdout.Fd())
 }
@@ -235,6 +237,7 @@ func padRight(s string, n int) string {
 }
 
 func Run(args []string, version string) error {
+	buildVersion = version
 	if len(args) < 2 {
 		runHelp()
 		return nil
@@ -395,6 +398,7 @@ func runServeDaemon(s *store.Store) error {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "config: %v\n", err)
 	}
+	cfg.Version = buildVersion
 
 	dir := server.ExpandPath(cfg.DataDir)
 	if err := os.MkdirAll(dir, 0755); err != nil {

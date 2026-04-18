@@ -465,13 +465,6 @@ body[data-theme="obsidian"] .view-stub {
 body[data-theme="obsidian"] .view-stub .big { font-size: 20px; color: var(--seg-text); font-weight: 500; }
 body[data-theme="obsidian"] .view-stub .hint { font-size: 12px; color: var(--seg-faint); font-family: var(--seg-font-mono); }
 
-/* connection indicator */
-body[data-theme="obsidian"] .ws-indicator {
-  width: 8px; height: 8px; border-radius: 50%;
-  background: var(--seg-faint); transition: background 200ms;
-}
-body[data-theme="obsidian"] .ws-indicator.connected { background: var(--seg-done); }
-
 /* animations */
 @keyframes segPulse {
   0%   { box-shadow: 0 0 0 0 rgba(122,167,217,0.55); }
@@ -487,6 +480,80 @@ body[data-theme="obsidian"] .ws-indicator.connected { background: var(--seg-done
 }
 .seg-pulse { animation: segPulse 1.4s ease-out; }
 .seg-enter { animation: segSlideIn 420ms cubic-bezier(.2,.7,.2,1); }
+
+/* a11y: visible focus ring only via keyboard */
+body[data-theme="obsidian"] button:focus-visible,
+body[data-theme="obsidian"] input:focus-visible,
+body[data-theme="obsidian"] textarea:focus-visible,
+body[data-theme="obsidian"] select:focus-visible,
+body[data-theme="obsidian"] .row:focus-visible,
+body[data-theme="obsidian"] .project-item:focus-visible,
+body[data-theme="obsidian"] .side-item:focus-visible {
+  outline: 2px solid var(--seg-accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+body[data-theme="obsidian"] .row[aria-selected="true"] { background: var(--seg-surface2); }
+
+/* light-mode tweaks for contrast on decorative chrome */
+body[data-theme="obsidian"][data-mode="light"] .brand-ver,
+body[data-theme="obsidian"][data-mode="light"] .row-time,
+body[data-theme="obsidian"][data-mode="light"] .row-id {
+  color: var(--seg-muted);
+}
+
+/* composer blocker select */
+body[data-theme="obsidian"] .composer .blocker-select {
+  max-width: 180px; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* ready filter sidebar item */
+body[data-theme="obsidian"] .side-item.ready-active {
+  color: var(--seg-text); background: var(--seg-surface2); font-weight: 500;
+}
+body[data-theme="obsidian"] .side-item.ready-active .pill {
+  color: var(--seg-done); background: rgba(122,194,138,0.14);
+}
+
+/* responsive: tablet (<=1100px) */
+@media (max-width: 1100px) {
+  body[data-theme="obsidian"] .sidebar { width: 180px; padding: 12px 6px; }
+  body[data-theme="obsidian"] .detail { width: 320px; }
+  body[data-theme="obsidian"] .search { min-width: 200px; }
+  body[data-theme="obsidian"] .view-tab .hint { display: none; }
+}
+/* responsive: narrow tablet (<=900px) */
+@media (max-width: 900px) {
+  body[data-theme="obsidian"] .sidebar { width: 160px; }
+  body[data-theme="obsidian"] .search { min-width: 160px; }
+  body[data-theme="obsidian"] .row {
+    grid-template-columns: 18px 70px 60px 1fr auto;
+    gap: 8px; padding: 9px 12px;
+  }
+  body[data-theme="obsidian"] .blocker-chip { display: none; }
+  body[data-theme="obsidian"] .detail {
+    position: absolute; right: 0; top: 0; bottom: 0;
+    width: min(420px, 100%); z-index: 50;
+    box-shadow: -12px 0 32px rgba(0,0,0,0.35);
+  }
+}
+/* responsive: mobile-ish (<=720px) */
+@media (max-width: 720px) {
+  body[data-theme="obsidian"] .sidebar { display: none; }
+  body[data-theme="obsidian"] .topbar { flex-wrap: wrap; gap: 8px; padding: 8px 12px; }
+  body[data-theme="obsidian"] .view-tabs { margin-left: 0; }
+  body[data-theme="obsidian"] .search-wrap { order: 10; flex-basis: 100%; }
+  body[data-theme="obsidian"] .agent-ind span:last-child { display: none; }
+  body[data-theme="obsidian"] .detail { width: 100%; }
+  body[data-theme="obsidian"] .row {
+    grid-template-columns: 18px 24px 1fr auto;
+    gap: 8px;
+  }
+  body[data-theme="obsidian"] .row .row-id { display: none; }
+  body[data-theme="obsidian"] .status-pill span:last-child { display: none; }
+  body[data-theme="obsidian"] .status-pill { min-width: 0; }
+}
 </style>
 </head>
 <body data-theme="obsidian" data-mode="dark">
@@ -515,16 +582,20 @@ const Store = {
   selectedId: null,
   view: 'list',                  // list | kanban | graph
   search: '',
+  filter: null,                  // null | 'ready'
   composerOpen: false,
+  composerTitle: '',             // staged new-task title (survives re-render)
+  composerBody: '',
+  composerBlocker: '',
   editingBody: null,             // null | string when editing body in detail panel
   editingTitle: null,
   newProjectOpen: false,
   wsConnected: false,
   theme: loadPref('theme', 'obsidian'),
   mode: loadPref('mode', 'dark'),
+  version: '',                   // populated from /internal/config
   pulse: {},                     // id -> timestamp for pulse animation
   entering: {},                  // id -> timestamp for enter animation
-  agentOn: true,                 // WS live flag (decorative)
 };
 
 function loadPref(key, fallback) {
@@ -756,8 +827,26 @@ const Actions = {
   clearSelection() { Store.selectedId = null; render(); },
   setView(v) { Store.view = v; render(); },
   setSearch(v) { Store.search = v; render({ preserveFocus: '.search input' }); },
-  openComposer() { Store.composerOpen = true; render({ focus: '.composer-title' }); },
-  closeComposer() { Store.composerOpen = false; render(); },
+  toggleReadyFilter() {
+    Store.filter = Store.filter === 'ready' ? null : 'ready';
+    Store.selectedId = null;
+    render();
+  },
+  openComposer() {
+    Store.composerOpen = true;
+    Store.composerTitle = '';
+    Store.composerBody = '';
+    Store.composerBlocker = '';
+    app.dataset.composerPri = '2';
+    render({ focus: '.composer-title' });
+  },
+  closeComposer() {
+    Store.composerOpen = false;
+    Store.composerTitle = '';
+    Store.composerBody = '';
+    Store.composerBlocker = '';
+    render();
+  },
   setTheme(name) {
     if (!Themes.registry[name]) return;
     Store.theme = name; savePref('theme', name); applyTheme(); render();
@@ -785,14 +874,22 @@ const Actions = {
   async createTaskFromComposer(title, body, priority, blockedBy) {
     if (!title || !title.trim() || !Store.activeProjectId) return;
     try {
-      await API.createTask(Store.activeProjectId, {
+      const created = await API.createTask(Store.activeProjectId, {
         title: title.trim(), body: (body || '').trim(), priority: priority | 0,
       });
-      if (blockedBy && blockedBy.trim()) {
-        // Follow-up PUT to set blocker since create endpoint doesn't accept it.
-        // We'll need the task id from create response; ignore for now if not returned.
+      // Create endpoint doesn't accept blocked_by; chain a PUT if needed.
+      if (blockedBy && created && created.id) {
+        await API.updateTask(created.id, {
+          project_id: Store.activeProjectId,
+          title: created.title,
+          body: created.body || '',
+          status: created.status,
+          priority: created.priority,
+          blocked_by: blockedBy,
+        });
       }
       Store.composerOpen = false;
+      Store.composerBlocker = '';
       render();
     } catch (e) { console.error('createTask', e); }
   },
@@ -834,6 +931,7 @@ const Actions = {
 // ===================================================================
 function filteredTasks() {
   let out = Store.tasks.slice();
+  if (Store.filter === 'ready') out = Util.ready(out);
   if (Store.search) out = Util.fuzzy(Store.search, out);
   return out;
 }
@@ -894,27 +992,28 @@ function obsTopbar(T) {
     { id: 'kanban', label: 'Kanban', hint: 'G K', enabled: false },
     { id: 'graph',  label: 'Graph',  hint: 'G G', enabled: false },
   ];
-  return '<div class="topbar">' +
+  return '<div class="topbar" role="banner">' +
     '<div class="brand">' +
-      '<div class="brand-mark"></div>' +
+      '<div class="brand-mark" aria-hidden="true"></div>' +
       '<span class="brand-name">Segments</span>' +
-      '<span class="ws-indicator ' + (Store.wsConnected ? 'connected' : '') + '" title="' + (Store.wsConnected ? 'connected' : 'disconnected') + '"></span>' +
+      (Store.version ? '<span class="brand-ver">v' + Util.esc(Store.version) + '</span>' : '') +
     '</div>' +
-    '<div class="view-tabs">' +
+    '<div class="view-tabs" role="tablist" aria-label="View mode">' +
       tabs.map(t => '<button class="view-tab ' + (Store.view === t.id ? 'active' : '') + '"' +
-        (t.enabled ? ' data-act="view" data-view="' + t.id + '"' : ' data-disabled="1" title="coming soon"') + '>' +
+        ' role="tab" aria-selected="' + (Store.view === t.id ? 'true' : 'false') + '"' +
+        (t.enabled ? ' data-act="view" data-view="' + t.id + '"' : ' aria-disabled="true" data-disabled="1" title="coming soon"') + '>' +
         Util.esc(t.label) + '<span class="hint">' + t.hint + '</span></button>').join('') +
     '</div>' +
     '<div class="search-wrap"><label class="search">' +
-      '<span class="icon">⌕</span>' +
-      '<input type="text" placeholder="Search tasks… (press / to focus)" value="' + Util.esc(Store.search) + '" data-act="search">' +
-      '<span class="slash">/</span>' +
+      '<span class="icon" aria-hidden="true">⌕</span>' +
+      '<input type="text" placeholder="Search tasks… (press / to focus)" aria-label="Search tasks" value="' + Util.esc(Store.search) + '" data-act="search">' +
+      '<span class="slash" aria-hidden="true">/</span>' +
     '</label></div>' +
     '<button class="topbar-btn" data-act="palette" title="Command palette (coming soon)">⌘K</button>' +
-    '<label class="agent-ind ' + (Store.agentOn ? 'on' : '') + '" title="WebSocket live-update indicator">' +
-      '<span class="agent-dot"></span>' +
-      '<span>Agent ' + (Store.wsConnected ? 'live' : 'paused') + '</span>' +
-    '</label>' +
+    '<span class="agent-ind ' + (Store.wsConnected ? 'on' : '') + '" role="status" aria-live="polite" title="' + (Store.wsConnected ? 'Live WebSocket connection' : 'Reconnecting…') + '">' +
+      '<span class="agent-dot" aria-hidden="true"></span>' +
+      '<span>' + (Store.wsConnected ? 'Live' : 'Paused') + '</span>' +
+    '</span>' +
     '<select class="theme-select" data-act="theme">' +
       Themes.list().map(k => '<option value="' + k + '"' + (k === Store.theme ? ' selected' : '') + '>' +
         Util.esc(Themes.get(k).label || k) + '</option>').join('') +
@@ -940,16 +1039,17 @@ function obsSidebar(T, counts, readyCount) {
     '</button>';
   }).join('');
 
-  return '<aside class="sidebar">' +
+  return '<aside class="sidebar" aria-label="Sidebar">' +
     '<div>' +
       '<div class="side-label">Views</div>' +
-      '<button class="side-item ' + (!Store.activeProjectId ? 'active' : '') + '" data-act="all-tasks"><span>All tasks</span><span class="count">' + counts.total + '</span></button>' +
-      '<button class="side-item"><span>Ready queue</span><span class="pill">' + readyCount + '</span></button>' +
+      '<button class="side-item ' + (Store.filter === 'ready' ? 'ready-active' : '') + '" data-act="toggle-ready" aria-pressed="' + (Store.filter === 'ready' ? 'true' : 'false') + '">' +
+        '<span>Ready queue</span><span class="pill">' + readyCount + '</span>' +
+      '</button>' +
     '</div>' +
     '<div>' +
       '<div class="side-label" style="display:flex;justify-content:space-between;align-items:center">' +
         '<span>Projects</span>' +
-        '<button data-act="new-project" title="New project" style="color:var(--seg-faint);font-size:14px;padding:0 4px;line-height:1">+</button>' +
+        '<button data-act="new-project" title="New project" aria-label="New project" style="color:var(--seg-faint);font-size:14px;padding:0 4px;line-height:1">+</button>' +
       '</div>' +
       '<div>' + projectsHtml + '</div>' +
     '</div>' +
@@ -964,12 +1064,22 @@ function obsSidebar(T, counts, readyCount) {
 }
 
 function obsComposer(T) {
-  return '<div class="composer">' +
-    '<input class="composer-title" type="text" placeholder="Task title — press Enter to create" data-act="composer-submit">' +
-    '<textarea class="composer-body" rows="2" placeholder="Description (optional)"></textarea>' +
+  const stagedPri = parseInt(app.dataset.composerPri || '2', 10);
+  const stagedBlk = Store.composerBlocker || '';
+  const blockerOpts = '<option value="">— none —</option>' + Store.tasks.map(x =>
+    '<option value="' + Util.esc(x.id) + '"' + (x.id === stagedBlk ? ' selected' : '') + '>' +
+    Util.esc(Util.shortId(x.id, 8)) + ' — ' + Util.esc((x.title || '').slice(0, 40)) + '</option>').join('');
+  return '<div class="composer" role="form" aria-label="New task">' +
+    '<input class="composer-title" type="text" placeholder="Task title — press Enter to create" aria-label="Title" data-act="composer-submit" value="' + Util.esc(Store.composerTitle || '') + '">' +
+    '<textarea class="composer-body" rows="2" placeholder="Description (optional)" aria-label="Description" data-act="composer-body">' + Util.esc(Store.composerBody || '') + '</textarea>' +
     '<div class="composer-row">' +
       '<span class="label">Priority</span>' +
-      [0, 1, 2, 3].map(p => '<button class="pri-btn" data-act="composer-pri" data-pri="' + p + '">P' + p + '</button>').join('') +
+      [0, 1, 2, 3].map(p => {
+        const on = p === stagedPri;
+        return '<button class="pri-btn' + (on ? ' active' : '') + '" data-act="composer-pri" data-pri="' + p + '" aria-pressed="' + (on ? 'true' : 'false') + '">P' + p + '</button>';
+      }).join('') +
+      '<span class="label" style="margin-left:12px">Blocker</span>' +
+      '<select class="blocker-select" data-act="composer-blocker" aria-label="Blocker">' + blockerOpts + '</select>' +
       '<span class="composer-hint"><kbd>↵</kbd> create · <kbd>esc</kbd> cancel</span>' +
     '</div>' +
   '</div>';
@@ -994,12 +1104,12 @@ function obsListView(T, tasks, byId) {
   }
   const groups = groupedByStatus(tasks);
   const T_META = T.statusMeta;
-  return '<div class="list">' +
+  return '<div class="list" role="grid" aria-label="Task list">' +
     groups.map(g => {
       const meta = T_META[g.key];
-      return '<div class="list-group">' +
-        '<div class="list-group-header">' +
-          '<span class="glyph" style="color:var(--seg-' + (g.key === 'in_progress' ? 'inprog' : g.key) + ')">' + (meta ? meta.glyph : '') + '</span>' +
+      return '<div class="list-group" role="rowgroup">' +
+        '<div class="list-group-header" role="row">' +
+          '<span class="glyph" aria-hidden="true" style="color:var(--seg-' + (g.key === 'in_progress' ? 'inprog' : g.key) + ')">' + (meta ? meta.glyph : '') + '</span>' +
           '<span>' + (meta ? meta.label : g.key) + '</span>' +
           '<span class="n">' + g.items.length + '</span>' +
         '</div>' +
@@ -1028,24 +1138,26 @@ function obsListRow(T, t, byId) {
   }).join('');
 
   const blockerChip = t.blocked_by
-    ? '<span class="blocker-chip ' + (unresolved ? 'unresolved' : '') + '" title="' + Util.esc(blocker ? blocker.title : t.blocked_by) + '">' +
+    ? '<span class="blocker-chip ' + (unresolved ? 'unresolved' : '') + '" role="gridcell" title="' + Util.esc(blocker ? blocker.title : t.blocked_by) + '">' +
         (unresolved ? '✕ ' : '✓ ') + Util.esc(Util.shortId(t.blocked_by, 8)) +
       '</span>'
-    : '<span></span>';
+    : '<span role="gridcell"></span>';
 
-  return '<div class="' + classes.join(' ') + '" data-act="select" data-id="' + Util.esc(t.id) + '">' +
-    '<span class="pri-bars p' + t.priority + '">' + bars + '</span>' +
-    '<span class="status-pill s-' + t.status + '">' +
-      '<span class="glyph">' + (meta ? meta.glyph : '') + '</span>' +
+  const priLabel = 'Priority P' + t.priority;
+  const statusLabel = meta ? meta.label : t.status;
+  return '<div class="' + classes.join(' ') + '" role="row" tabindex="0" aria-selected="' + (selected ? 'true' : 'false') + '" aria-label="' + Util.esc(statusLabel + ' · ' + t.title) + '" data-act="select" data-id="' + Util.esc(t.id) + '">' +
+    '<span class="pri-bars p' + t.priority + '" role="gridcell" aria-label="' + priLabel + '">' + bars + '</span>' +
+    '<span class="status-pill s-' + t.status + '" role="gridcell">' +
+      '<span class="glyph" aria-hidden="true">' + (meta ? meta.glyph : '') + '</span>' +
       '<span>' + (meta ? meta.label : t.status) + '</span>' +
     '</span>' +
-    '<span class="row-id" title="' + Util.esc(t.id) + '">' + Util.esc(Util.shortId(t.id, 8)) + '</span>' +
-    '<span class="row-title-wrap">' +
+    '<span class="row-id" role="gridcell" title="' + Util.esc(t.id) + '">' + Util.esc(Util.shortId(t.id, 8)) + '</span>' +
+    '<span class="row-title-wrap" role="gridcell">' +
       '<span class="row-title">' + Util.esc(t.title) + '</span>' +
       (body1 ? '<span class="row-body">— ' + Util.esc(body1) + '</span>' : '') +
     '</span>' +
     blockerChip +
-    '<span class="row-time">' + Util.esc(Util.relTime(t.updated_at)) + '</span>' +
+    '<span class="row-time" role="gridcell">' + Util.esc(Util.relTime(t.updated_at)) + '</span>' +
   '</div>';
 }
 
@@ -1061,8 +1173,8 @@ function obsDetail(T, task, byId) {
 
   const editing = Store.editingBody !== null || Store.editingTitle !== null;
   const titleHtml = Store.editingTitle !== null
-    ? '<input class="composer-title" type="text" value="' + Util.esc(Store.editingTitle) + '" data-act="detail-edit-title" style="background:var(--seg-surface);border:1px solid var(--seg-line);padding:8px 12px;border-radius:4px;width:calc(100% - 36px);margin:14px 18px 8px">'
-    : '<h2 class="detail-title" data-act="edit-title">' + Util.esc(task.title) + '</h2>';
+    ? '<input class="composer-title" type="text" value="' + Util.esc(Store.editingTitle) + '" aria-label="Task title" data-act="detail-edit-title" style="background:var(--seg-surface);border:1px solid var(--seg-line);padding:8px 12px;border-radius:4px;width:calc(100% - 36px);margin:14px 18px 8px">'
+    : '<h2 class="detail-title" tabindex="0" role="button" aria-label="Edit title" data-act="edit-title">' + Util.esc(task.title) + '</h2>';
   const bodyHtml = Store.editingBody !== null
     ? '<div class="detail-body"><textarea data-act="detail-edit-body">' + Util.esc(Store.editingBody) + '</textarea><div style="margin-top:6px;font-size:10.5px;color:var(--seg-faint)"><kbd>⌘↵</kbd> save · <kbd>esc</kbd> cancel</div></div>'
     : '<div class="detail-body" data-act="edit-body">' +
@@ -1132,6 +1244,28 @@ const app = document.getElementById('app');
 
 function render(opts) {
   applyTheme();
+  // Capture caret + focus target before blowing away the DOM so (a) typing in
+  // search doesn't jump to end on every keystroke, and (b) WS-driven
+  // re-renders don't steal focus from the composer/edit fields.
+  let savedSel = null;
+  let autoPreserve = null;
+  const active = document.activeElement;
+  if (opts && opts.preserveFocus) {
+    const prev = document.querySelector(opts.preserveFocus);
+    if (prev && prev === active) {
+      try { savedSel = { start: prev.selectionStart, end: prev.selectionEnd }; } catch (e) {}
+    }
+  } else if (active && active !== document.body && app.contains(active)) {
+    const tag = (active.tagName || '').toUpperCase();
+    const act = active.dataset ? active.dataset.act : null;
+    if (tag === 'INPUT' || tag === 'TEXTAREA') {
+      // Reconstruct a selector that can re-find this input after re-render.
+      if (act) {
+        autoPreserve = '[data-act="' + act + '"]';
+        try { savedSel = { start: active.selectionStart, end: active.selectionEnd }; } catch (e) {}
+      }
+    }
+  }
   const theme = Themes.get(Store.theme);
   const html = (theme.render || renderObsidian)();
   app.innerHTML = html;
@@ -1143,9 +1277,20 @@ function render(opts) {
     const el = document.querySelector(opts.scrollTo);
     if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest' });
   }
-  if (opts && opts.preserveFocus) {
-    const el = document.querySelector(opts.preserveFocus);
-    if (el) { el.focus(); if (el.setSelectionRange) { try { const v = el.value; el.setSelectionRange(v.length, v.length); } catch (e) {} } }
+  const refocus = (opts && opts.preserveFocus) || autoPreserve;
+  if (refocus) {
+    const el = document.querySelector(refocus);
+    if (el) {
+      el.focus();
+      if (savedSel && el.setSelectionRange) {
+        try {
+          const len = (el.value || '').length;
+          const s = Math.min(savedSel.start != null ? savedSel.start : len, len);
+          const e = Math.min(savedSel.end != null ? savedSel.end : len, len);
+          el.setSelectionRange(s, e);
+        } catch (e) {}
+      }
+    }
   }
 }
 
@@ -1175,7 +1320,7 @@ app.addEventListener('click', async (e) => {
     case 'deselect': Actions.clearSelection(); return;
     case 'view': Actions.setView(el.dataset.view); return;
     case 'project': Actions.switchProject(id); return;
-    case 'all-tasks': /* deferred until multi-project list-all is wired */ return;
+    case 'toggle-ready': Actions.toggleReadyFilter(); return;
     case 'new-project': Actions.openNewProject(); return;
     case 'close-new-project': Actions.closeNewProject(); return;
     case 'close-new-project-backdrop':
@@ -1191,7 +1336,11 @@ app.addEventListener('click', async (e) => {
     case 'palette': /* deferred */ return;
     case 'composer-pri': {
       const p = parseInt(el.dataset.pri, 10);
-      document.querySelectorAll('.pri-btn').forEach(b => b.classList.toggle('active', parseInt(b.dataset.pri, 10) === p));
+      document.querySelectorAll('.pri-btn').forEach(b => {
+        const on = parseInt(b.dataset.pri, 10) === p;
+        b.classList.toggle('active', on);
+        b.setAttribute('aria-pressed', on ? 'true' : 'false');
+      });
       app.dataset.composerPri = String(p);
       return;
     }
@@ -1227,6 +1376,8 @@ app.addEventListener('input', (e) => {
     case 'search': Store.search = el.value; render({ preserveFocus: '.search input' }); return;
     case 'detail-edit-title': Store.editingTitle = el.value; return;
     case 'detail-edit-body': Store.editingBody = el.value; return;
+    case 'composer-submit': Store.composerTitle = el.value; return;
+    case 'composer-body': Store.composerBody = el.value; return;
   }
 });
 
@@ -1244,6 +1395,21 @@ app.addEventListener('change', async (e) => {
     case 'detail-blocker':
       if (Store.selectedId) await Actions.saveTaskEdit(Store.selectedId, { blocked_by: el.value });
       return;
+    case 'composer-blocker':
+      Store.composerBlocker = el.value || '';
+      return;
+  }
+});
+
+// Auto-save detail title on blur (keyboard Enter is handled in keydown).
+app.addEventListener('focusout', async (e) => {
+  const { el, act } = actOf(e.target);
+  if (act === 'detail-edit-title' && Store.editingTitle !== null && Store.selectedId) {
+    const sel = Store.selectedId;
+    const patch = { title: Store.editingTitle };
+    Store.editingTitle = null;
+    await Actions.saveTaskEdit(sel, patch);
+    render();
   }
 });
 
@@ -1252,16 +1418,34 @@ app.addEventListener('keydown', async (e) => {
   if (!act) return;
   if (act === 'composer-submit' && e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
-    const title = el.value;
-    const body = (document.querySelector('.composer-body') || {}).value || '';
-    const pri = parseInt(app.dataset.composerPri || '1', 10);
-    await Actions.createTaskFromComposer(title, body, pri, '');
+    const title = Store.composerTitle || el.value || '';
+    const body = Store.composerBody || (document.querySelector('.composer-body') || {}).value || '';
+    const pri = parseInt(app.dataset.composerPri || '2', 10);
+    await Actions.createTaskFromComposer(title, body, pri, Store.composerBlocker || '');
     return;
   }
   if (act === 'detail-edit-body' && e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
     e.preventDefault();
     const btn = document.querySelector('[data-act="detail-save"]');
     if (btn) btn.click();
+    return;
+  }
+  if (act === 'detail-edit-title' && e.key === 'Enter') {
+    e.preventDefault();
+    const sel = Store.selectedId;
+    if (sel && Store.editingTitle !== null) {
+      const patch = { title: Store.editingTitle };
+      Store.editingTitle = null;
+      await Actions.saveTaskEdit(sel, patch);
+      render();
+    }
+    return;
+  }
+  if (act === 'edit-title' && e.key === 'Enter') {
+    // Keyboard activation of the heading -> open edit mode.
+    e.preventDefault();
+    Store.editingTitle = (Store.selectedId && Store.tasks.find(t => t.id === Store.selectedId)?.title) || '';
+    render({ focus: '.detail input' });
     return;
   }
   if (act === 'new-project-input' && e.key === 'Enter') {
@@ -1320,10 +1504,19 @@ window.addEventListener('keydown', (e) => {
 // ===================================================================
 // Bootstrap
 // ===================================================================
+async function loadServerConfig() {
+  try {
+    const r = await fetch('/internal/config');
+    const c = await r.json();
+    if (c && c.version) { Store.version = c.version; render(); }
+  } catch (e) {}
+}
+
 applyTheme();
 render();
 wsConnect();
 loadProjects();
+loadServerConfig();
 </script>
 </body>
 </html>
