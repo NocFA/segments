@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Segments</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2032%2032%22%3E%3Cdefs%3E%3ClinearGradient%20id%3D%22g%22%20x1%3D%220%22%20y1%3D%220%22%20x2%3D%221%22%20y2%3D%221%22%3E%3Cstop%20offset%3D%220%22%20stop-color%3D%22%237aa7d9%22%2F%3E%3Cstop%20offset%3D%221%22%20stop-color%3D%22%23e7e5e2%22%2F%3E%3C%2FlinearGradient%3E%3C%2Fdefs%3E%3Crect%20width%3D%2232%22%20height%3D%2232%22%20rx%3D%226%22%20fill%3D%22url(%23g)%22%2F%3E%3Crect%20x%3D%227%22%20y%3D%227%22%20width%3D%2218%22%20height%3D%2218%22%20rx%3D%222%22%20fill%3D%22%230e1012%22%2F%3E%3C%2Fsvg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600&family=Geist+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -472,6 +473,77 @@ body[data-theme="obsidian"] .view-stub {
 }
 body[data-theme="obsidian"] .view-stub .big { font-size: 20px; color: var(--seg-text); font-weight: 500; }
 body[data-theme="obsidian"] .view-stub .hint { font-size: 12px; color: var(--seg-faint); font-family: var(--seg-font-mono); }
+
+/* kanban view */
+body[data-theme="obsidian"] .kanban {
+  flex: 1; display: grid;
+  grid-template-columns: repeat(4, minmax(220px, 1fr));
+  overflow: auto; background: var(--seg-bg);
+}
+body[data-theme="obsidian"] .kanban-col {
+  display: flex; flex-direction: column;
+  border-right: 1px solid var(--seg-line);
+  min-width: 0; transition: background 140ms ease;
+}
+body[data-theme="obsidian"] .kanban-col:last-child { border-right: none; }
+body[data-theme="obsidian"] .kanban-col.drag-over { background: var(--seg-accent-dim); }
+body[data-theme="obsidian"] .kanban-col-head {
+  position: sticky; top: 0; z-index: 1;
+  display: flex; align-items: center; gap: 8px;
+  padding: 14px 16px 10px; background: var(--seg-bg);
+  border-bottom: 1px solid var(--seg-line);
+  font-size: 11px; letter-spacing: 0.5px; text-transform: uppercase;
+  color: var(--seg-muted);
+}
+body[data-theme="obsidian"] .kanban-col-head .glyph { font-size: 13px; width: 14px; text-align: center; }
+body[data-theme="obsidian"] .kanban-col-head.g-in_progress .glyph { color: var(--seg-inprog); }
+body[data-theme="obsidian"] .kanban-col-head.g-blocker     .glyph { color: var(--seg-blocker); }
+body[data-theme="obsidian"] .kanban-col-head.g-todo        .glyph { color: var(--seg-todo); }
+body[data-theme="obsidian"] .kanban-col-head.g-done        .glyph { color: var(--seg-done); }
+body[data-theme="obsidian"] .kanban-col-head .n {
+  margin-left: auto; color: var(--seg-faint);
+  font-size: 10.5px; font-variant-numeric: tabular-nums;
+}
+body[data-theme="obsidian"] .kanban-col-body {
+  flex: 1; padding: 10px; overflow: auto;
+  display: flex; flex-direction: column; gap: 6px;
+  min-height: 120px;
+}
+body[data-theme="obsidian"] .kanban-card {
+  padding: 10px 11px;
+  background: var(--seg-surface);
+  border: 1px solid var(--seg-line);
+  border-radius: 5px;
+  cursor: grab; position: relative;
+  transition: border-color 120ms ease, box-shadow 120ms ease, opacity 120ms ease;
+}
+body[data-theme="obsidian"] .kanban-card:hover { border-color: var(--seg-line2); }
+body[data-theme="obsidian"] .kanban-card.selected { border-color: var(--seg-accent); box-shadow: var(--seg-glow); }
+body[data-theme="obsidian"] .kanban-card.dragging { opacity: 0.35; cursor: grabbing; }
+body[data-theme="obsidian"] .kanban-card .card-top {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-bottom: 6px;
+}
+body[data-theme="obsidian"] .kanban-card .card-id {
+  font-size: 10.5px; color: var(--seg-faint); font-family: var(--seg-font-mono);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+body[data-theme="obsidian"] .kanban-card .card-title {
+  font-size: 12.5px; color: var(--seg-text); line-height: 1.35;
+  font-weight: 450; margin-bottom: 6px;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
+body[data-theme="obsidian"] .kanban-card .card-bottom {
+  display: flex; justify-content: space-between; align-items: center; gap: 8px;
+  font-size: 10.5px; color: var(--seg-faint); font-variant-numeric: tabular-nums;
+  min-width: 0;
+}
+body[data-theme="obsidian"] .kanban-card .card-bottom .card-time { white-space: nowrap; }
+body[data-theme="obsidian"] .kanban-empty {
+  color: var(--seg-faint); font-size: 11.5px;
+  padding: 28px 10px; text-align: center;
+  border: 1px dashed var(--seg-line); border-radius: 4px;
+}
 
 /* graph view */
 body[data-theme="obsidian"] .graph {
@@ -1125,6 +1197,101 @@ body[data-theme="console"] .view-stub {
 }
 body[data-theme="console"] .view-stub .big { font-size: 14px; color: var(--seg-amber); }
 body[data-theme="console"] .view-stub .hint { font-size: 10.5px; color: var(--seg-faint); }
+
+/* kanban view */
+body[data-theme="console"] .kanban {
+  flex: 1; display: grid;
+  grid-template-columns: repeat(4, minmax(220px, 1fr));
+  overflow: auto; background: var(--seg-bg);
+  font-family: var(--seg-font-mono);
+}
+body[data-theme="console"] .kanban-col {
+  display: flex; flex-direction: column;
+  border-right: 1px dashed var(--seg-line);
+  min-width: 0; transition: background 140ms ease;
+}
+body[data-theme="console"] .kanban-col:last-child { border-right: none; }
+body[data-theme="console"] .kanban-col.drag-over { background: var(--seg-accent-dim); }
+body[data-theme="console"] .kanban-col-head {
+  position: sticky; top: 0; z-index: 1;
+  padding: 10px 14px 6px; background: var(--seg-bg);
+  border-bottom: 1px dashed var(--seg-line);
+  display: flex; align-items: baseline; gap: 6px;
+  font-family: var(--seg-font-mono);
+  font-size: 10.5px; letter-spacing: 0.5px;
+  color: var(--seg-muted);
+}
+body[data-theme="console"] .kanban-col-head.g-in_progress { color: var(--seg-inprog); }
+body[data-theme="console"] .kanban-col-head.g-blocker     { color: var(--seg-blocker); }
+body[data-theme="console"] .kanban-col-head.g-todo        { color: var(--seg-todo); }
+body[data-theme="console"] .kanban-col-head.g-done        { color: var(--seg-done); }
+body[data-theme="console"] .kanban-col-head .glyph { font-size: 11px; }
+body[data-theme="console"] .kanban-col-head .n {
+  margin-left: auto; color: var(--seg-faint);
+  font-variant-numeric: tabular-nums;
+}
+body[data-theme="console"] .kanban-col-body {
+  flex: 1; padding: 8px 10px; overflow: auto;
+  display: flex; flex-direction: column; gap: 6px;
+  min-height: 120px;
+}
+body[data-theme="console"] .kanban-card {
+  padding: 8px 10px;
+  background: var(--seg-surface);
+  border: 1px solid var(--seg-line);
+  border-left: 2px solid transparent;
+  cursor: grab;
+  color: var(--seg-text);
+  font-family: var(--seg-font-mono);
+  font-size: 11.5px; line-height: 1.4;
+  transition: border-color 120ms ease, opacity 120ms ease;
+}
+body[data-theme="console"] .kanban-card.s-in_progress { border-left-color: var(--seg-inprog); }
+body[data-theme="console"] .kanban-card.s-blocker     { border-left-color: var(--seg-blocker); }
+body[data-theme="console"] .kanban-card.s-todo        { border-left-color: var(--seg-todo); }
+body[data-theme="console"] .kanban-card.s-done        { border-left-color: var(--seg-done); }
+body[data-theme="console"] .kanban-card:hover { border-color: var(--seg-line2); }
+body[data-theme="console"] .kanban-card.selected { border-color: var(--seg-amber); border-left-color: var(--seg-amber); }
+body[data-theme="console"] .kanban-card.dragging { opacity: 0.35; cursor: grabbing; }
+body[data-theme="console"] .kanban-card .card-top {
+  display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
+  margin-bottom: 4px;
+}
+body[data-theme="console"] .kanban-card .pri-bang {
+  font-size: 11px; font-weight: 600; letter-spacing: -0.3px;
+  font-family: var(--seg-font-mono); min-width: 22px;
+}
+body[data-theme="console"] .kanban-card .pri-bang.p0 { color: var(--seg-pri0); }
+body[data-theme="console"] .kanban-card .pri-bang.p1 { color: var(--seg-pri1); }
+body[data-theme="console"] .kanban-card .pri-bang.p2 { color: var(--seg-pri2); }
+body[data-theme="console"] .kanban-card .pri-bang.p3 { color: var(--seg-pri3); }
+body[data-theme="console"] .kanban-card .card-id {
+  color: var(--seg-muted); font-size: 10.5px; font-family: var(--seg-font-mono);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+body[data-theme="console"] .kanban-card .card-title {
+  color: var(--seg-text); font-family: var(--seg-font-body);
+  font-size: 12px; line-height: 1.35;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+  margin-bottom: 4px;
+}
+body[data-theme="console"] .kanban-card .card-bottom {
+  display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
+  font-size: 10px; color: var(--seg-faint);
+  min-width: 0;
+}
+body[data-theme="console"] .kanban-card .card-bottom .card-time { white-space: nowrap; }
+body[data-theme="console"] .kanban-card .blocker-chip {
+  font-size: 10px; font-family: var(--seg-font-mono); color: var(--seg-muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+body[data-theme="console"] .kanban-card .blocker-chip.unresolved { color: var(--seg-red); }
+body[data-theme="console"] .kanban-card .blocker-chip.resolved   { color: var(--seg-green); }
+body[data-theme="console"] .kanban-empty {
+  color: var(--seg-faint); font-family: var(--seg-font-mono);
+  font-size: 10.5px; text-align: center;
+  padding: 24px 8px; border: 1px dashed var(--seg-line);
+}
 
 /* graph view */
 body[data-theme="console"] .graph {
@@ -1924,6 +2091,103 @@ body[data-theme="dossier"] .view-stub .hint {
   color: var(--seg-faint); text-transform: uppercase;
 }
 
+/* kanban view (Board) */
+body[data-theme="dossier"] .kanban {
+  flex: 1; display: grid;
+  grid-template-columns: repeat(4, minmax(240px, 1fr));
+  overflow: auto; background: var(--seg-bg);
+}
+body[data-theme="dossier"] .kanban-col {
+  display: flex; flex-direction: column;
+  border-right: 1px solid var(--seg-rule2);
+  min-width: 0; transition: background 160ms ease;
+}
+body[data-theme="dossier"] .kanban-col:last-child { border-right: none; }
+body[data-theme="dossier"] .kanban-col.drag-over { background: var(--seg-accent-dim); }
+body[data-theme="dossier"] .kanban-col-head {
+  position: sticky; top: 0; z-index: 1;
+  padding: 20px 20px 10px; background: var(--seg-bg);
+  border-bottom: 1px solid var(--seg-rule);
+  display: flex; align-items: baseline; gap: 10px;
+  font-family: var(--seg-font-serif);
+  font-size: 20px; font-style: italic; letter-spacing: -0.2px;
+  color: var(--seg-muted);
+}
+body[data-theme="dossier"] .kanban-col-head.g-in_progress { color: var(--seg-inprog); }
+body[data-theme="dossier"] .kanban-col-head.g-blocker     { color: var(--seg-blocker); }
+body[data-theme="dossier"] .kanban-col-head.g-todo        { color: var(--seg-text); }
+body[data-theme="dossier"] .kanban-col-head.g-done        { color: var(--seg-done); }
+body[data-theme="dossier"] .kanban-col-head .glyph { font-size: 14px; font-style: normal; }
+body[data-theme="dossier"] .kanban-col-head .n {
+  margin-left: auto;
+  font-family: var(--seg-font); font-size: 10px; letter-spacing: 1.5px;
+  color: var(--seg-muted); text-transform: uppercase;
+  font-variant-numeric: tabular-nums;
+}
+body[data-theme="dossier"] .kanban-col-body {
+  flex: 1; padding: 14px; overflow: auto;
+  display: flex; flex-direction: column; gap: 12px;
+  min-height: 140px;
+}
+body[data-theme="dossier"] .kanban-card {
+  padding: 14px 16px;
+  background: var(--seg-surface);
+  border: 1px solid var(--seg-rule2);
+  cursor: grab;
+  transition: border-color 140ms ease, box-shadow 140ms ease, opacity 140ms ease;
+}
+body[data-theme="dossier"] .kanban-card:hover { border-color: var(--seg-rule); }
+body[data-theme="dossier"] .kanban-card.selected {
+  border-color: var(--seg-rule); box-shadow: 5px 5px 0 var(--seg-rule2);
+}
+body[data-theme="dossier"] .kanban-card.dragging { opacity: 0.35; cursor: grabbing; }
+body[data-theme="dossier"] .kanban-card .card-top {
+  display: flex; justify-content: space-between; align-items: baseline; gap: 10px;
+  margin-bottom: 8px;
+  font-family: var(--seg-font); font-size: 9.5px; letter-spacing: 1.5px;
+  color: var(--seg-muted); text-transform: uppercase;
+}
+body[data-theme="dossier"] .kanban-card .pri-roman {
+  font-family: var(--seg-font-serif); font-size: 18px;
+  font-style: italic; letter-spacing: 0; text-transform: none;
+  line-height: 1;
+}
+body[data-theme="dossier"] .kanban-card .pri-roman.p0 { color: var(--seg-pri0); }
+body[data-theme="dossier"] .kanban-card .pri-roman.p1 { color: var(--seg-pri1); }
+body[data-theme="dossier"] .kanban-card .pri-roman.p2 { color: var(--seg-pri2); }
+body[data-theme="dossier"] .kanban-card .pri-roman.p3 { color: var(--seg-pri3); }
+body[data-theme="dossier"] .kanban-card .card-id {
+  font-family: var(--seg-font); color: var(--seg-faint);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+body[data-theme="dossier"] .kanban-card .card-title {
+  font-family: var(--seg-font-serif); font-size: 15px;
+  color: var(--seg-text); line-height: 1.3; letter-spacing: -0.2px;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+  margin-bottom: 8px;
+}
+body[data-theme="dossier"] .kanban-card .card-bottom {
+  display: flex; justify-content: space-between; align-items: baseline; gap: 10px;
+  font-family: var(--seg-font); font-size: 9.5px; letter-spacing: 1.2px;
+  color: var(--seg-muted); text-transform: uppercase;
+  min-width: 0;
+}
+body[data-theme="dossier"] .kanban-card .card-bottom .card-time { white-space: nowrap; }
+body[data-theme="dossier"] .kanban-card .blocker-chip {
+  font-family: var(--seg-font); font-size: 9.5px; letter-spacing: 1.2px;
+  color: var(--seg-muted); font-weight: 500;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+body[data-theme="dossier"] .kanban-card .blocker-chip.unresolved {
+  color: var(--seg-blocker);
+}
+body[data-theme="dossier"] .kanban-empty {
+  color: var(--seg-faint);
+  font-family: var(--seg-font-serif); font-size: 13px; font-style: italic;
+  padding: 28px 10px; text-align: center;
+  border: 0.5px dashed var(--seg-rule2);
+}
+
 /* graph view (Lineage) */
 body[data-theme="dossier"] .graph {
   flex: 1; overflow: auto; background: var(--seg-bg);
@@ -2323,6 +2587,8 @@ const Store = {
   agentLog: [],                  // rolling log of WS events for console theme tail
   _graphContentW: 0,             // measured .content width; drives graph wrapping
   combo: null,                   // null | { scope, query, cursor, showFinished }
+  dragging: null,                // id of task currently being dragged in Kanban
+  dragOverCol: null,             // kanban column (status) the pointer is over
 };
 
 function pushAgentLog(msg) {
@@ -2952,6 +3218,16 @@ function groupedByStatus(tasks) {
   return order.filter(s => buckets[s].length).map(s => ({ key: s, items: buckets[s] }));
 }
 
+// Kanban uses a fixed left-to-right flow: intake -> active work -> stuck -> settled.
+// Closed tasks are terminal and not shown on the board; flip back to List to edit them.
+const KANBAN_COLS = ['todo', 'in_progress', 'blocker', 'done'];
+function groupedForKanban(tasks) {
+  const buckets = {};
+  KANBAN_COLS.forEach(s => buckets[s] = []);
+  tasks.forEach(t => { if (buckets[t.status]) buckets[t.status].push(t); });
+  return buckets;
+}
+
 // ===================================================================
 // Shared dependency-graph layout. Rank = longest path from a root; roots
 // have rank 0. Within a rank, nodes flow left to right and wrap to a new
@@ -3137,7 +3413,7 @@ function renderObsidian() {
 function obsTopbar(T) {
   const tabs = [
     { id: 'list',   label: 'List',   hint: 'G L', enabled: true },
-    { id: 'kanban', label: 'Kanban', hint: 'G K', enabled: false },
+    { id: 'kanban', label: 'Kanban', hint: 'G K', enabled: true },
     { id: 'graph',  label: 'Graph',  hint: 'G G', enabled: true },
   ];
   return '<div class="topbar" role="banner">' +
@@ -3231,14 +3507,76 @@ function obsComposer(T) {
 }
 
 function obsMainView(T, tasks, byId) {
-  if (Store.view === 'kanban') {
-    return '<div class="view-stub">' +
-      '<div class="big">Kanban view</div>' +
-      '<div class="hint">coming in a follow-up task</div>' +
-    '</div>';
-  }
+  if (Store.view === 'kanban') return obsKanbanView(T, tasks, byId);
   if (Store.view === 'graph') return obsGraphView(T, tasks, byId);
   return obsListView(T, tasks, byId);
+}
+
+function obsKanbanView(T, tasks, byId) {
+  if (!Store.activeProjectId) {
+    return '<div class="view-stub">' +
+      '<div class="big">Kanban</div>' +
+      '<div class="hint">select or create a project to get started.</div>' +
+    '</div>';
+  }
+  const buckets = groupedForKanban(tasks);
+  const meta = T.statusMeta;
+  return '<div class="kanban" data-act="deselect">' +
+    KANBAN_COLS.map(col => {
+      const items = buckets[col] || [];
+      const m = meta[col] || { label: col, glyph: '' };
+      const over = Store.dragging && Store.dragOverCol === col;
+      return '<div class="kanban-col' + (over ? ' drag-over' : '') + '" data-act="kanban-col" data-status="' + col + '">' +
+        '<div class="kanban-col-head g-' + col + '">' +
+          '<span class="glyph" aria-hidden="true">' + m.glyph + '</span>' +
+          '<span>' + Util.esc(m.label) + '</span>' +
+          '<span class="n">' + items.length + '</span>' +
+        '</div>' +
+        '<div class="kanban-col-body">' +
+          (items.length
+            ? items.map(t => obsKanbanCard(T, t, byId)).join('')
+            : '<div class="kanban-empty">drop here</div>') +
+        '</div>' +
+      '</div>';
+    }).join('') +
+  '</div>';
+}
+
+function obsKanbanCard(T, t, byId) {
+  const blocker = t.blocked_by ? byId[t.blocked_by] : null;
+  const unresolved = blocker && blocker.status !== 'done';
+  const selected = Store.selectedId === t.id;
+  const dragging = Store.dragging === t.id;
+  const pulsing = Store.pulse[t.id] && Date.now() - Store.pulse[t.id] < 2000;
+  const entering = !!Store.entering[t.id];
+  const classes = ['kanban-card', 's-' + t.status];
+  if (selected) classes.push('selected');
+  if (dragging) classes.push('dragging');
+  if (pulsing) classes.push('seg-pulse');
+  if (entering) classes.push('seg-enter');
+
+  const bars = [0, 1, 2, 3].map(i => {
+    const filled = (4 - t.priority);
+    return '<span class="f' + i + ' ' + (i < filled ? 'on' : '') + '"></span>';
+  }).join('');
+
+  const blockerChip = t.blocked_by
+    ? '<span class="blocker-chip ' + (unresolved ? 'unresolved' : '') + '" title="' + Util.esc(blocker ? blocker.title : t.blocked_by) + '">' +
+        (unresolved ? '\u2715 ' : '\u2713 ') + Util.esc(Util.shortId(t.blocked_by, 8)) +
+      '</span>'
+    : '<span></span>';
+
+  return '<div class="' + classes.join(' ') + '" draggable="true" data-act="kanban-card" data-id="' + Util.esc(t.id) + '" aria-label="' + Util.esc(t.title) + '">' +
+    '<div class="card-top">' +
+      '<span class="card-id" title="' + Util.esc(t.id) + '">' + Util.esc(Util.shortId(t.id, 8)) + '</span>' +
+      '<span class="pri-bars p' + t.priority + '" aria-label="Priority P' + t.priority + '">' + bars + '</span>' +
+    '</div>' +
+    '<div class="card-title">' + Util.esc(t.title) + '</div>' +
+    '<div class="card-bottom">' +
+      blockerChip +
+      '<span class="card-time">' + Util.esc(Util.relTime(t.updated_at)) + '</span>' +
+    '</div>' +
+  '</div>';
 }
 
 function obsGraphView(T, tasks, byId) {
@@ -3496,7 +3834,7 @@ function renderConsole() {
 function conTopbar(T) {
   const tabs = [
     { id: 'list',   label: 'LIST',   hint: 'gl', enabled: true },
-    { id: 'kanban', label: 'KANBAN', hint: 'gk', enabled: false },
+    { id: 'kanban', label: 'KANBAN', hint: 'gk', enabled: true },
     { id: 'graph',  label: 'GRAPH',  hint: 'gg', enabled: true },
   ];
   return '<div class="topbar" role="banner">' +
@@ -3616,14 +3954,74 @@ function conComposer(T) {
 }
 
 function conMainView(T, tasks, byId) {
-  if (Store.view === 'kanban') {
-    return '<div class="view-stub">' +
-      '<div class="big">KANBAN</div>' +
-      '<div class="hint">// coming in a follow-up task</div>' +
-    '</div>';
-  }
+  if (Store.view === 'kanban') return conKanbanView(T, tasks, byId);
   if (Store.view === 'graph') return conGraphView(T, tasks, byId);
   return conListView(T, tasks, byId);
+}
+
+function conKanbanView(T, tasks, byId) {
+  if (!Store.activeProjectId) {
+    return '<div class="view-stub">' +
+      '<div class="big">KANBAN</div>' +
+      '<div class="hint">// select or create a project to get started.</div>' +
+    '</div>';
+  }
+  const buckets = groupedForKanban(tasks);
+  const meta = T.statusMeta;
+  return '<div class="kanban" data-act="deselect">' +
+    KANBAN_COLS.map(col => {
+      const items = buckets[col] || [];
+      const m = meta[col] || { label: col, glyph: '' };
+      const over = Store.dragging && Store.dragOverCol === col;
+      return '<div class="kanban-col' + (over ? ' drag-over' : '') + '" data-act="kanban-col" data-status="' + col + '">' +
+        '<div class="kanban-col-head g-' + col + '">' +
+          '<span class="glyph" aria-hidden="true">' + m.glyph + '</span>' +
+          '<span>' + Util.esc(m.label) + '</span>' +
+          '<span class="n">[' + items.length + ']</span>' +
+        '</div>' +
+        '<div class="kanban-col-body">' +
+          (items.length
+            ? items.map(t => conKanbanCard(T, t, byId)).join('')
+            : '<div class="kanban-empty">// drop here</div>') +
+        '</div>' +
+      '</div>';
+    }).join('') +
+  '</div>';
+}
+
+function conKanbanCard(T, t, byId) {
+  const blocker = t.blocked_by ? byId[t.blocked_by] : null;
+  const unresolved = blocker && blocker.status !== 'done';
+  const selected = Store.selectedId === t.id;
+  const dragging = Store.dragging === t.id;
+  const pulsing = Store.pulse[t.id] && Date.now() - Store.pulse[t.id] < 2000;
+  const entering = !!Store.entering[t.id];
+  const classes = ['kanban-card', 's-' + t.status];
+  if (selected) classes.push('selected');
+  if (dragging) classes.push('dragging');
+  if (pulsing) classes.push('seg-pulse');
+  if (entering) classes.push('seg-enter');
+
+  const bangs = ['!!!', '!!', '!', '\u00B7'];
+  const bang = bangs[t.priority] || '\u00B7';
+
+  const blockerChip = t.blocked_by
+    ? '<span class="blocker-chip ' + (unresolved ? 'unresolved' : 'resolved') + '" title="' + Util.esc(blocker ? blocker.title : t.blocked_by) + '">' +
+        (unresolved ? '\u2298' : '\u2713') + Util.esc(Util.shortId(t.blocked_by, 8)) +
+      '</span>'
+    : '<span></span>';
+
+  return '<div class="' + classes.join(' ') + '" draggable="true" data-act="kanban-card" data-id="' + Util.esc(t.id) + '" aria-label="' + Util.esc(t.title) + '">' +
+    '<div class="card-top">' +
+      '<span class="pri-bang p' + t.priority + '" aria-label="Priority P' + t.priority + '">' + bang + '</span>' +
+      '<span class="card-id" title="' + Util.esc(t.id) + '">' + Util.esc(Util.shortId(t.id, 8)) + '</span>' +
+    '</div>' +
+    '<div class="card-title">' + Util.esc(t.title) + '</div>' +
+    '<div class="card-bottom">' +
+      blockerChip +
+      '<span class="card-time">' + Util.esc(Util.relTime(t.updated_at)) + '</span>' +
+    '</div>' +
+  '</div>';
 }
 
 function conGraphView(T, tasks, byId) {
@@ -3879,7 +4277,7 @@ function dosTopbar(T, counts, readyCount) {
   const total = counts.total || 0;
   const tabs = [
     { id: 'list',   label: 'List',    hint: 'gl', enabled: true },
-    { id: 'kanban', label: 'Board',   hint: 'gk', enabled: false },
+    { id: 'kanban', label: 'Board',   hint: 'gk', enabled: true },
     { id: 'graph',  label: 'Lineage', hint: 'gg', enabled: true },
   ];
   return '<div class="topbar" role="banner">' +
@@ -3990,14 +4388,71 @@ function dosComposer(T) {
 }
 
 function dosMainView(T, tasks, byId) {
-  if (Store.view === 'kanban') {
-    return '<div class="view-stub">' +
-      '<div class="big">Board</div>' +
-      '<div class="hint">\u2014 coming in a follow-up \u2014</div>' +
-    '</div>';
-  }
+  if (Store.view === 'kanban') return dosKanbanView(T, tasks, byId);
   if (Store.view === 'graph') return dosGraphView(T, tasks, byId);
   return dosListView(T, tasks, byId);
+}
+
+function dosKanbanView(T, tasks, byId) {
+  if (!Store.activeProjectId) {
+    return '<div class="view-stub">' +
+      '<div class="big">Board</div>' +
+      '<div class="hint">\u2014 select or create a project to get started \u2014</div>' +
+    '</div>';
+  }
+  const buckets = groupedForKanban(tasks);
+  const meta = T.statusMeta;
+  return '<div class="kanban" data-act="deselect">' +
+    KANBAN_COLS.map(col => {
+      const items = buckets[col] || [];
+      const m = meta[col] || { label: col, glyph: '' };
+      const over = Store.dragging && Store.dragOverCol === col;
+      return '<div class="kanban-col' + (over ? ' drag-over' : '') + '" data-act="kanban-col" data-status="' + col + '">' +
+        '<div class="kanban-col-head g-' + col + '">' +
+          '<span class="glyph" aria-hidden="true">' + m.glyph + '</span>' +
+          '<span>' + Util.esc(m.label) + '</span>' +
+          '<span class="n">' + items.length + '</span>' +
+        '</div>' +
+        '<div class="kanban-col-body">' +
+          (items.length
+            ? items.map(t => dosKanbanCard(T, t, byId)).join('')
+            : '<div class="kanban-empty">\u2014 drop here \u2014</div>') +
+        '</div>' +
+      '</div>';
+    }).join('') +
+  '</div>';
+}
+
+function dosKanbanCard(T, t, byId) {
+  const blocker = t.blocked_by ? byId[t.blocked_by] : null;
+  const unresolved = blocker && blocker.status !== 'done';
+  const selected = Store.selectedId === t.id;
+  const dragging = Store.dragging === t.id;
+  const pulsing = Store.pulse[t.id] && Date.now() - Store.pulse[t.id] < 2000;
+  const entering = !!Store.entering[t.id];
+  const classes = ['kanban-card', 's-' + t.status];
+  if (selected) classes.push('selected');
+  if (dragging) classes.push('dragging');
+  if (pulsing) classes.push('seg-pulse');
+  if (entering) classes.push('seg-enter');
+
+  const blockerChip = t.blocked_by
+    ? '<span class="blocker-chip ' + (unresolved ? 'unresolved' : 'resolved') + '" title="' + Util.esc(blocker ? blocker.title : t.blocked_by) + '">' +
+        (unresolved ? 'on hold \u00B7 ' : 'clear \u00B7 ') + Util.esc(Util.shortId(t.blocked_by, 8)) +
+      '</span>'
+    : '<span></span>';
+
+  return '<div class="' + classes.join(' ') + '" draggable="true" data-act="kanban-card" data-id="' + Util.esc(t.id) + '" aria-label="' + Util.esc(t.title) + '">' +
+    '<div class="card-top">' +
+      '<span class="pri-roman p' + t.priority + '" aria-label="Priority P' + t.priority + '">' + DOS_ROMAN[t.priority] + '</span>' +
+      '<span class="card-id" title="' + Util.esc(t.id) + '">No. ' + Util.esc(Util.shortId(t.id, 6)) + '</span>' +
+    '</div>' +
+    '<div class="card-title">' + Util.esc(t.title) + '</div>' +
+    '<div class="card-bottom">' +
+      blockerChip +
+      '<span class="card-time">' + Util.esc(Util.relTime(t.updated_at)) + '</span>' +
+    '</div>' +
+  '</div>';
 }
 
 function dosGraphView(T, tasks, byId) {
@@ -4380,6 +4835,8 @@ app.addEventListener('click', async (e) => {
   switch (act) {
     case 'select': Actions.selectTask(id); return;
     case 'deselect': Actions.clearSelection(); return;
+    case 'kanban-card': Actions.selectTask(id); return;
+    case 'kanban-col': Actions.clearSelection(); return;
     case 'view': Actions.setView(el.dataset.view); return;
     case 'project': Actions.switchProject(id); return;
     case 'toggle-ready': Actions.toggleReadyFilter(); return;
@@ -4481,6 +4938,91 @@ app.addEventListener('focusout', async (e) => {
     await Actions.saveTaskEdit(sel, patch);
     render();
   }
+});
+
+// ===================================================================
+// Kanban drag-and-drop (native HTML5). Card fires `dragstart`; the nearest
+// `data-act="kanban-col"` ancestor handles dragover/drop. On drop we apply
+// an optimistic local status change, then PUT; the WS `task:updated`
+// broadcast reconciles any divergence.
+// ===================================================================
+function findKanbanCol(el) {
+  while (el && el !== app) {
+    if (el.dataset && el.dataset.act === 'kanban-col') return el;
+    el = el.parentElement;
+  }
+  return null;
+}
+
+app.addEventListener('dragstart', (e) => {
+  const { el, act } = actOf(e.target);
+  if (act !== 'kanban-card' || !el) return;
+  const id = el.dataset.id || '';
+  Store.dragging = id;
+  try {
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', id);
+  } catch (err) {}
+  // Apply .dragging without re-rendering so the browser's native drag image
+  // is captured from the pre-dim card, then fade the source immediately after.
+  setTimeout(() => {
+    const card = document.querySelector('.kanban-card[data-id="' + CSS.escape(id) + '"]');
+    if (card) card.classList.add('dragging');
+  }, 0);
+});
+
+app.addEventListener('dragend', () => {
+  if (!Store.dragging && !Store.dragOverCol) return;
+  Store.dragging = null;
+  Store.dragOverCol = null;
+  document.querySelectorAll('.kanban-card.dragging').forEach(n => n.classList.remove('dragging'));
+  document.querySelectorAll('.kanban-col.drag-over').forEach(n => n.classList.remove('drag-over'));
+});
+
+app.addEventListener('dragover', (e) => {
+  if (!Store.dragging) return;
+  const col = findKanbanCol(e.target);
+  if (!col) return;
+  e.preventDefault();
+  try { e.dataTransfer.dropEffect = 'move'; } catch (err) {}
+  const status = col.dataset.status;
+  if (Store.dragOverCol === status) return;
+  Store.dragOverCol = status;
+  document.querySelectorAll('.kanban-col.drag-over').forEach(n => n.classList.remove('drag-over'));
+  col.classList.add('drag-over');
+});
+
+app.addEventListener('dragleave', (e) => {
+  // Fires when leaving any nested element; we clear only when leaving the column
+  // entirely (relatedTarget outside the current column's subtree).
+  if (!Store.dragOverCol) return;
+  const col = findKanbanCol(e.target);
+  if (!col) return;
+  const rel = e.relatedTarget;
+  if (rel && col.contains(rel)) return;
+  col.classList.remove('drag-over');
+  if (Store.dragOverCol === col.dataset.status) Store.dragOverCol = null;
+});
+
+app.addEventListener('drop', async (e) => {
+  const col = findKanbanCol(e.target);
+  if (!col) return;
+  e.preventDefault();
+  const status = col.dataset.status;
+  let id = '';
+  try { id = e.dataTransfer.getData('text/plain') || Store.dragging || ''; }
+  catch (err) { id = Store.dragging || ''; }
+  Store.dragging = null;
+  Store.dragOverCol = null;
+  document.querySelectorAll('.kanban-card.dragging').forEach(n => n.classList.remove('dragging'));
+  document.querySelectorAll('.kanban-col.drag-over').forEach(n => n.classList.remove('drag-over'));
+  if (!id || !status) { render(); return; }
+  const t = Store.tasks.find(x => x.id === id);
+  if (!t || t.status === status) { render(); return; }
+  // Optimistic: move the card now, persist after. WS broadcast reconciles.
+  t.status = status;
+  render();
+  await Actions.saveTaskEdit(id, { status });
 });
 
 app.addEventListener('keydown', async (e) => {

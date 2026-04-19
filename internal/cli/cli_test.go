@@ -165,6 +165,10 @@ func TestPromptCuesPresent(t *testing.T) {
 			"blocked_by",
 			"correctness",
 			"#0",
+			"claim",
+			"in_progress",
+			"segments_update_tasks",
+			"segments_delete_tasks",
 		} {
 			if !strings.Contains(text, cue) {
 				t.Errorf("%s: missing cue %q", name, cue)
@@ -177,6 +181,14 @@ func TestPromptCuesPresent(t *testing.T) {
 	if !strings.Contains(segmentsShortcutInstructions, "discovered-from") {
 		t.Errorf("segmentsShortcutInstructions: missing 'discovered-from' idiom")
 	}
+	// The old "at most one in_progress at a time" rule was removed when the
+	// claim semantic landed -- it conflicted with bulk-claiming a sequence of
+	// tasks. If someone reintroduces it, fail loudly.
+	for _, text := range []string{mcpServerInstructions, segmentsShortcutInstructions} {
+		if strings.Contains(text, "at most one in_progress") {
+			t.Errorf("stale 'at most one in_progress' phrasing is back in the prompt; claim semantic permits multiple in_progress")
+		}
+	}
 }
 
 func TestMCPToolDefsPriorityAndBlockedByCues(t *testing.T) {
@@ -185,6 +197,7 @@ func TestMCPToolDefsPriorityAndBlockedByCues(t *testing.T) {
 		"segments_create_task":  true,
 		"segments_create_tasks": true,
 		"segments_update_task":  true,
+		"segments_update_tasks": true,
 	}
 	for _, d := range defs {
 		name, _ := d["name"].(string)
@@ -198,13 +211,47 @@ func TestMCPToolDefsPriorityAndBlockedByCues(t *testing.T) {
 				t.Errorf("%s: priority description missing cue %q", name, cue)
 			}
 		}
-		if name != "segments_update_task" {
+		if name == "segments_create_task" || name == "segments_create_tasks" {
 			// create variants must frame blocked_by as REQUIRED when a hard
-			// dependency exists; update is allowed to be softer since most
-			// updates are unrelated to dependency wiring.
+			// dependency exists; update variants are allowed to be softer
+			// since most updates are unrelated to dependency wiring.
 			if !strings.Contains(s, "REQUIRED") {
 				t.Errorf("%s: blocked_by description missing REQUIRED framing", name)
 			}
 		}
+	}
+}
+
+// TestMCPToolDefsAdvertiseBulkVariants ensures the single-task variants tell
+// the LLM to prefer the bulk one, and that the bulk variants exist and
+// teach the claim semantic. Without this nudge LLMs default to N individual
+// calls.
+func TestMCPToolDefsAdvertiseBulkVariants(t *testing.T) {
+	defs := mcpToolDefs()
+	byName := map[string]string{}
+	for _, d := range defs {
+		name, _ := d["name"].(string)
+		raw, _ := json.Marshal(d)
+		byName[name] = string(raw)
+	}
+	for _, name := range []string{"segments_create_tasks", "segments_update_tasks", "segments_delete_tasks"} {
+		if _, ok := byName[name]; !ok {
+			t.Errorf("missing bulk tool: %s", name)
+		}
+	}
+	for _, pair := range []struct{ single, bulk string }{
+		{"segments_create_task", "segments_create_tasks"},
+		{"segments_update_task", "segments_update_tasks"},
+		{"segments_delete_task", "segments_delete_tasks"},
+	} {
+		desc := byName[pair.single]
+		if !strings.Contains(desc, pair.bulk) {
+			t.Errorf("%s description does not point at bulk variant %s", pair.single, pair.bulk)
+		}
+	}
+	// segments_update_tasks description must teach the claim-sequence idiom
+	// (the whole reason the tool exists), so regressions are caught.
+	if desc := byName["segments_update_tasks"]; !strings.Contains(desc, "claim") || !strings.Contains(desc, "in_progress") {
+		t.Errorf("segments_update_tasks description missing claim / in_progress framing: %s", desc)
 	}
 }

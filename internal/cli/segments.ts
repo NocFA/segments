@@ -94,19 +94,53 @@ export default function (pi: ExtensionAPI) {
 
   pi.registerTool({
     name: "seg_update",
-    description: "Update a task. Only provided fields change. Use status=in_progress when you start working on a task and status=done when it lands.",
+    description: "Update a single task. For two or more updates, prefer seg_update_many -- one call, fewer tokens, atomic claim semantics. Only provided fields change. Use status=in_progress to claim a task when you start work and status=done when it lands.",
     parameters: Type.Object({
       project_id: Type.String({ description: "Project ID" }),
       task_id: Type.String({ description: "Task ID" }),
       title: Type.Optional(Type.String({ description: "New title" })),
       body: Type.Optional(Type.String({ description: "New body" })),
-      status: Type.Optional(Type.String({ description: "todo | in_progress | done | closed | blocker. Set in_progress when you pick a task up; done when the work lands." })),
+      status: Type.Optional(Type.String({ description: "todo | in_progress | done | closed | blocker. Set in_progress when you claim/pick a task up; done when the work lands." })),
       priority: Type.Optional(Type.Number({ description: "Integer. 1=URGENT (drop everything / blocking work). 2=NORMAL (regular session work). 3=BACKLOG (someday/idea/future). 0=unset is legacy-only." })),
       blocked_by: Type.Optional(Type.String({ description: "Task ID of a hard blocker (empty to clear). Set whenever this task literally cannot start until the blocker lands." })),
     }),
     handler: async ({ project_id, task_id, title = "", body = "", status = "", priority, blocked_by = "" }: any) => {
       const p = typeof priority === "number" ? priority : -1;
       return request(`/api/tasks/${task_id}`, "PUT", { project_id, title, body, status, priority: p, blocked_by });
+    },
+  });
+
+  pi.registerTool({
+    name: "seg_update_many",
+    description: "Update multiple tasks in one call. PREFERRED whenever you are changing two or more tasks. Use this to CLAIM a sequence of tasks (status=in_progress on each) up front when the user hands you multiple task IDs to work through -- all downstream agents see the claim atomically instead of racing. Also use it to mark several tasks done at session end. Per-entry fields follow seg_update semantics.",
+    parameters: Type.Object({
+      project_id: Type.String({ description: "Project ID" }),
+      updates: Type.Array(Type.Object({
+        task_id: Type.String({ description: "Task ID to update" }),
+        title: Type.Optional(Type.String({ description: "New title" })),
+        body: Type.Optional(Type.String({ description: "New body" })),
+        status: Type.Optional(Type.String({ description: "todo | in_progress | done | closed | blocker. Set in_progress to claim; done when work lands." })),
+        priority: Type.Optional(Type.Number({ description: "Integer 1/2/3. 1=URGENT, 2=NORMAL, 3=BACKLOG. 0=unset is legacy-only." })),
+        blocked_by: Type.Optional(Type.String({ description: "Task ID of a hard blocker (empty to clear)." })),
+      })),
+    }),
+    handler: async ({ project_id, updates }: { project_id: string; updates: Array<{ task_id: string; title?: string; body?: string; status?: string; priority?: number; blocked_by?: string }> }) => {
+      const results: any[] = [];
+      for (let i = 0; i < updates.length; i++) {
+        const u = updates[i];
+        if (!u.task_id) throw new Error(`updates[${i}].task_id is required`);
+        const p = typeof u.priority === "number" ? u.priority : -1;
+        const t = await request(`/api/tasks/${u.task_id}`, "PUT", {
+          project_id,
+          title: u.title ?? "",
+          body: u.body ?? "",
+          status: u.status ?? "",
+          priority: p,
+          blocked_by: u.blocked_by ?? "",
+        });
+        results.push(t);
+      }
+      return results;
     },
   });
 
@@ -124,13 +158,32 @@ export default function (pi: ExtensionAPI) {
 
   pi.registerTool({
     name: "seg_rm",
-    description: "Delete a task",
+    description: "Delete a single task. For two or more deletes, prefer seg_rm_many.",
     parameters: Type.Object({
       project_id: Type.String({ description: "Project ID" }),
       task_id: Type.String({ description: "Task ID" }),
     }),
     handler: async ({ project_id, task_id }: { project_id: string; task_id: string }) => {
       return request(`/api/tasks/${task_id}?project_id=${project_id}`, "DELETE");
+    },
+  });
+
+  pi.registerTool({
+    name: "seg_rm_many",
+    description: "Delete multiple tasks in one call. PREFERRED whenever removing two or more tasks.",
+    parameters: Type.Object({
+      project_id: Type.String({ description: "Project ID" }),
+      task_ids: Type.Array(Type.String({ description: "Task ID" })),
+    }),
+    handler: async ({ project_id, task_ids }: { project_id: string; task_ids: string[] }) => {
+      const deleted: string[] = [];
+      for (let i = 0; i < task_ids.length; i++) {
+        const id = task_ids[i];
+        if (!id) throw new Error(`task_ids[${i}] must be a non-empty string`);
+        await request(`/api/tasks/${id}?project_id=${project_id}`, "DELETE");
+        deleted.push(id);
+      }
+      return { deleted };
     },
   });
 
@@ -169,8 +222,9 @@ export default function (pi: ExtensionAPI) {
       `When to use it (proactively, without being asked):`,
       `  Planning           Break a feature or refactor into steps BEFORE coding. Use seg_add_many to stub the whole queue in ONE call with priority + blocked_by on every entry.`,
       `  Scaffolding        Stub upcoming work as todo tasks so the queue is visible.`,
-      `  Starting work      Pick from the Ready queue (unblocked todos, listed below). seg_update status=in_progress on the one you pick. Keep at most one in_progress at a time.`,
-      `  Finishing          seg_done when the work lands.`,
+      `  Starting / claiming work`,
+      `                     Pick from the Ready queue (unblocked todos, listed below). IMMEDIATELY set status=in_progress to "claim" the task so other agents/sessions do not pick up the same work. If the user hands you multiple task IDs to work in sequence, claim ALL of them up front via seg_update_many (bulk) so every one is marked in_progress before you start task one, then process them one at a time. Claim only what you will actually work this session; revert unwanted claims back to todo so others can pick them up.`,
+      `  Finishing          seg_done when the work lands (or seg_update_many to mark several done at once).`,
       `  New scope          Capture every "we should also..." as a new todo immediately. If the follow-up was discovered while working on task X and cannot start until X lands, set blocked_by=<X's id> (the "discovered-from" pattern).`,
       `  "segment it" / "sg it" / "seg it" / "segment this" / "sg this" / "seg this"`,
       `                     Capture the current topic as a task right now, no clarifying questions.`,
@@ -191,17 +245,20 @@ export default function (pi: ExtensionAPI) {
       `    - Discovered-from: follow-up task discovered while working on X and cannot start until X is done -> blocked_by=<X's id>.`,
       `  Leave blocked_by empty only for genuinely independent tasks. Soft "do this after that" ordering is handled by priority and list order, not blocked_by. Never create cycles. Creating a scaffold batch without linking the obvious dependency chain is a correctness mistake, not a style choice.`,
       ``,
-      `Tools:`,
+      `Tools: prefer the _many bulk variants whenever you touch two or more tasks -- one call, fewer tokens, atomic claim semantics.`,
       `  seg_tasks(project_id, status?)`,
       `  seg_add(project_id, title, body?, priority=1|2|3, blocked_by?)`,
       `  seg_add_many(project_id, tasks: [{title, body?, priority=1|2|3, blocked_by?}, ...])`,
       `                                                      Preferred for planning. Use "#0".."#N" in blocked_by to reference earlier tasks in this batch.`,
       `  seg_update(project_id, task_id, title?, body?, status?, priority?, blocked_by?)`,
       `                                                      status: todo | in_progress | done | closed | blocker`,
+      `  seg_update_many(project_id, updates: [{task_id, title?, body?, status?, priority?, blocked_by?}, ...])`,
+      `                                                      Preferred for claiming a run of tasks or marking several done at once.`,
       `  seg_done(project_id, task_id)`,
       `  seg_rm(project_id, task_id)`,
+      `  seg_rm_many(project_id, task_ids: [id, id, ...])`,
       ``,
-      `If the segments MCP server is also configured, equivalent tools are segments_list_tasks, segments_create_task, segments_create_tasks, segments_update_task, segments_get_task, segments_delete_task. The MCP tools accept an optional project_id -- if omitted they auto-resolve from CWD basename.`,
+      `If the segments MCP server is also configured, equivalent tools are segments_list_tasks, segments_create_task, segments_create_tasks, segments_update_task, segments_update_tasks, segments_get_task, segments_delete_task, segments_delete_tasks. The MCP tools accept an optional project_id -- if omitted they auto-resolve from CWD basename.`,
       ``,
       `Ready queue = todos whose blocker is empty or done. Pick from there first. IDs below are full UUIDs ready to paste into tool calls.`,
     ].join("\n");

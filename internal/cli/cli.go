@@ -1672,8 +1672,9 @@ const segmentsShortcutInstructions = `Segments is the persistent task tracker fo
 When to use it (proactively, without being asked):
   Planning           Break a feature or refactor into steps BEFORE coding. Use segments_create_tasks to stub the whole queue in ONE call with priority + blocked_by on every entry.
   Scaffolding        Stub upcoming work as todo tasks so the queue is visible.
-  Starting work      Pick from the Ready queue (unblocked todos, listed below). segments_update_task status=in_progress on the one you pick. Keep at most one in_progress at a time.
-  Finishing          segments_update_task status=done when the work lands.
+  Starting / claiming work
+                     Pick from the Ready queue (unblocked todos, listed below). IMMEDIATELY set status=in_progress to "claim" the task so other agents/sessions do not pick up the same work. If the user hands you multiple task IDs to work in sequence, claim ALL of them up front with segments_update_tasks (bulk) so every one is marked in_progress before you start task one; then process them one at a time. Claim only what you will actually work in this session; revert unwanted claims back to todo so others can pick them up.
+  Finishing          segments_update_task status=done when the work lands (or segments_update_tasks to mark several done at once).
   New scope          Capture every "we should also..." as a new todo immediately so it survives a context wipe. If the follow-up was discovered while working on task X and cannot start until X lands, set blocked_by=<X's id> (the "discovered-from" pattern).
   "segment it" / "sg it" / "seg it" / "segment this" / "sg this" / "seg this"
                      Capture the current topic as a task right now, no clarifying questions.
@@ -1695,7 +1696,7 @@ blocked_by is a correctness signal, not a hint. Set blocked_by=<task_id> wheneve
   Leave blocked_by empty only for genuinely independent tasks. "Do this after that" for flow reasons is handled by priority + list order, not blocked_by. Never create cycles.
   In segments_create_tasks, "#0".."#N" references earlier entries in the same batch; the server resolves these to real UUIDs. Prefer this over creating tasks in two calls just to get UUIDs. Creating a scaffolded batch without linking the obvious dependency chain is a correctness mistake, not a style choice.
 
-MCP tools (server name: "segments"). Your client may expose them under these exact names or with an "mcp__segments__" prefix (Claude Code does). Trust your client's own tool list; do not invent names. project_id is OPTIONAL on all task tools: it auto-resolves from CWD basename, single-project fallback, or $SEGMENTS_PROJECT_ID. If your client advertises no segments_* tools at all, the MCP server is not connected -- fall back to the CLI below; do not guess tool names.
+MCP tools (server name: "segments"). Your client may expose them under these exact names or with an "mcp__segments__" prefix (Claude Code does). Trust your client's own tool list; do not invent names. project_id is OPTIONAL on all task tools: it auto-resolves from CWD basename, single-project fallback, or $SEGMENTS_PROJECT_ID. If your client advertises no segments_* tools at all, the MCP server is not connected -- fall back to the CLI below; do not guess tool names. Prefer the bulk variants (segments_create_tasks / segments_update_tasks / segments_delete_tasks) whenever you are touching two or more tasks -- one call, fewer tokens, atomic claim semantics.
   segments_list_projects()
   segments_list_tasks(project_id?, status?)
   segments_get_task(task_id, project_id?)
@@ -1705,7 +1706,11 @@ MCP tools (server name: "segments"). Your client may expose them under these exa
   segments_update_task(task_id, title?, body?, status?, priority?, blocked_by?, project_id?)
       status: todo | in_progress | done | closed | blocker
       Only provided fields change; omitted fields are preserved.
+  segments_update_tasks(updates: [{task_id, title?, body?, status?, priority?, blocked_by?}, ...], project_id?)
+      Bulk update. PREFERRED for claiming a run of tasks (set status=in_progress on each) in ONE call, or for marking several tasks done at session end. Per-entry fields follow segments_update_task semantics.
   segments_delete_task(task_id, project_id?)
+  segments_delete_tasks(task_ids: [id1, id2, ...], project_id?)
+      Bulk delete. PREFERRED whenever removing two or more tasks.
 
 CLI fallback (only if MCP tools are unavailable). -p is optional: sg auto-resolves project_id the same way MCP does (CWD basename / single-project / $SEGMENTS_PROJECT_ID). Pass -p only to override.
   sg list                                   List projects and tasks
@@ -1847,7 +1852,9 @@ func negotiateProtocolVersion(req map[string]interface{}) string {
 	return supportedMCPProtocolVersions[0]
 }
 
-const mcpServerInstructions = `Segments tracks multi-session work as a dependency graph. Use segments_create_tasks to scaffold whole queues in ONE round-trip (the tasks argument MUST be a real JSON array, not a stringified one). Use segments_update_task status=in_progress when starting work and status=done when it lands. Capture every "we should also..." as a new task so it survives context wipes. project_id is optional: auto-resolves from CWD basename, single-project fallback, or $SEGMENTS_PROJECT_ID.
+const mcpServerInstructions = `Segments tracks multi-session work as a dependency graph. Prefer the bulk variants (segments_create_tasks / segments_update_tasks / segments_delete_tasks) whenever you touch two or more tasks -- one round-trip, fewer tokens. The array argument for each MUST be a real JSON array, not a stringified one. project_id is optional: auto-resolves from CWD basename, single-project fallback, or $SEGMENTS_PROJECT_ID.
+
+Claim work by setting status=in_progress the moment you start a task -- this prevents other agents/sessions from picking up the same work. When the user hands you multiple task IDs to work in sequence, claim ALL of them up front via segments_update_tasks (bulk) so every one is marked in_progress before you start task one, then process them one at a time. Mark status=done as each task's work lands. Capture every "we should also..." as a new task so it survives context wipes.
 
 Priority is an integer 1/2/3 and is required when creating -- pick one based on user intent, never omit it. 1=URGENT ("drop everything", "broken build", "blocking prod", or actively blocking other ready work). 2=NORMAL ("let's do X" / regular session work; default when the intent is clearly now-or-next but not urgent). 3=BACKLOG ("sometime", "maybe later", "one idea is", future idea). 0 is unset (legacy only); do NOT pick 0 when creating.
 
@@ -1949,20 +1956,49 @@ func mcpToolDefs() []map[string]interface{} {
 					},
 				},
 			})},
-		{"name": "segments_update_task", "description": "Update a task. Only provided fields are changed; omitted fields are preserved. Use status=in_progress when you start working on a task and status=done when it lands.",
+		{"name": "segments_update_task", "description": "Update a single task. For two or more updates, ALWAYS prefer segments_update_tasks (one call, fewer tokens, atomic claim semantics). Only provided fields are changed; omitted fields are preserved. Use status=in_progress to claim a task when you start work and status=done when it lands.",
 			"inputSchema": schema([]string{"task_id"}, map[string]interface{}{
 				"project_id": optProject,
 				"task_id":    prop("string", "Task ID"),
 				"title":      prop("string", "New title"),
 				"body":       prop("string", "New body/description"),
-				"status":     prop("string", "todo | in_progress | done | closed | blocker. Set in_progress when you pick a task up; done when the work lands."),
+				"status":     prop("string", "todo | in_progress | done | closed | blocker. Set in_progress when you claim/pick up a task; done when the work lands."),
 				"priority":   prop("number", "Integer. 1=URGENT (drop everything / blocking work). 2=NORMAL (regular session work). 3=BACKLOG (someday/idea/future). 0=unset is legacy-only."),
 				"blocked_by": prop("string", "Task ID of a hard blocker (empty to clear). Set whenever this task literally cannot start until the blocker lands."),
 			})},
-		{"name": "segments_delete_task", "description": "Delete a task.",
+		{"name": "segments_update_tasks", "description": "Update multiple tasks in one call. PREFERRED whenever you are changing two or more tasks -- one round-trip instead of N separate calls. The 'updates' argument MUST be a real JSON array of objects (NOT a JSON-encoded string). Use this to CLAIM a sequence of tasks (set status=in_progress on each) up front when the user hands you multiple task IDs to work through -- all downstream agents see the claim atomically instead of racing. Also use it to mark several tasks done at session end. Per-entry fields follow segments_update_task semantics.",
+			"inputSchema": schema([]string{"updates"}, map[string]interface{}{
+				"project_id": optProject,
+				"updates": map[string]interface{}{
+					"type":        "array",
+					"description": "JSON array of update objects (NOT a stringified array). Each object: {task_id, title?, body?, status?, priority?, blocked_by?}. Only provided fields change; omitted fields are preserved per-task.",
+					"items": map[string]interface{}{
+						"type":     "object",
+						"required": []string{"task_id"},
+						"properties": map[string]interface{}{
+							"task_id":    prop("string", "Task ID to update"),
+							"title":      prop("string", "New title"),
+							"body":       prop("string", "New body/description"),
+							"status":     prop("string", "todo | in_progress | done | closed | blocker. Set in_progress to claim; done when work lands."),
+							"priority":   prop("number", "Integer 1/2/3. 1=URGENT, 2=NORMAL, 3=BACKLOG. 0=unset is legacy-only."),
+							"blocked_by": prop("string", "Task ID of a hard blocker (empty to clear)."),
+						},
+					},
+				},
+			})},
+		{"name": "segments_delete_task", "description": "Delete a single task. For two or more deletes, ALWAYS prefer segments_delete_tasks.",
 			"inputSchema": schema([]string{"task_id"}, map[string]interface{}{
 				"project_id": optProject,
 				"task_id":    prop("string", "Task ID"),
+			})},
+		{"name": "segments_delete_tasks", "description": "Delete multiple tasks in one call. PREFERRED whenever removing two or more tasks -- one round-trip instead of N separate calls. The 'task_ids' argument MUST be a real JSON array of strings (NOT a JSON-encoded string).",
+			"inputSchema": schema([]string{"task_ids"}, map[string]interface{}{
+				"project_id": optProject,
+				"task_ids": map[string]interface{}{
+					"type":        "array",
+					"description": "JSON array of task ID strings (NOT a stringified array).",
+					"items":       map[string]interface{}{"type": "string"},
+				},
 			})},
 		{"name": "segments_get_task", "description": "Get full task details including body, priority, blocked_by, and dates.",
 			"inputSchema": schema([]string{"task_id"}, map[string]interface{}{
@@ -2164,6 +2200,51 @@ func callTool(s *store.Store, tool string, args map[string]interface{}) string {
 		}
 		notifyServerEvent("task:updated", t)
 		return marshal(t)
+	case "segments_update_tasks":
+		pid, err := resolveProjectIDForMCP(s, str("project_id"))
+		if err != nil {
+			return errMsg(err)
+		}
+		raw, ok := args["updates"].([]interface{})
+		if !ok {
+			if updatesStr, isStr := args["updates"].(string); isStr {
+				if perr := json.Unmarshal([]byte(updatesStr), &raw); perr != nil {
+					return errMsg(fmt.Errorf("updates must be a JSON array of objects, not a string. Received a string that failed to parse: %v", perr))
+				}
+			}
+		}
+		if len(raw) == 0 {
+			return errMsg(fmt.Errorf("updates must be a non-empty JSON array of {task_id, title?, body?, status?, priority?, blocked_by?} objects"))
+		}
+		updated := make([]*models.Task, 0, len(raw))
+		for i, item := range raw {
+			obj, ok := item.(map[string]interface{})
+			if !ok {
+				return errMsg(fmt.Errorf("updates[%d] is not an object", i))
+			}
+			taskID, _ := obj["task_id"].(string)
+			if taskID == "" {
+				return errMsg(fmt.Errorf("updates[%d].task_id is required", i))
+			}
+			title, _ := obj["title"].(string)
+			body, _ := obj["body"].(string)
+			status := models.TaskStatus("")
+			if s, ok := obj["status"].(string); ok {
+				status = models.TaskStatus(s)
+			}
+			priority := -1
+			if p, ok := obj["priority"]; ok {
+				priority = coerceInt(p, -1)
+			}
+			blockedBy, _ := obj["blocked_by"].(string)
+			t, err := s.UpdateTask(pid, taskID, title, body, status, priority, blockedBy)
+			if err != nil {
+				return errMsg(fmt.Errorf("updates[%d]: %v", i, err))
+			}
+			notifyServerEvent("task:updated", t)
+			updated = append(updated, t)
+		}
+		return marshal(updated)
 	case "segments_delete_task":
 		pid, err := resolveProjectIDForMCP(s, str("project_id"))
 		if err != nil {
@@ -2175,6 +2256,35 @@ func callTool(s *store.Store, tool string, args map[string]interface{}) string {
 		}
 		notifyServerEvent("task:deleted", map[string]string{"id": taskID, "project_id": pid})
 		return `{"deleted": true}`
+	case "segments_delete_tasks":
+		pid, err := resolveProjectIDForMCP(s, str("project_id"))
+		if err != nil {
+			return errMsg(err)
+		}
+		raw, ok := args["task_ids"].([]interface{})
+		if !ok {
+			if idsStr, isStr := args["task_ids"].(string); isStr {
+				if perr := json.Unmarshal([]byte(idsStr), &raw); perr != nil {
+					return errMsg(fmt.Errorf("task_ids must be a JSON array of strings, not a string. Received a string that failed to parse: %v", perr))
+				}
+			}
+		}
+		if len(raw) == 0 {
+			return errMsg(fmt.Errorf("task_ids must be a non-empty JSON array of strings"))
+		}
+		deleted := make([]string, 0, len(raw))
+		for i, item := range raw {
+			taskID, ok := item.(string)
+			if !ok || taskID == "" {
+				return errMsg(fmt.Errorf("task_ids[%d] must be a non-empty string", i))
+			}
+			if err := s.DeleteTask(pid, taskID); err != nil {
+				return errMsg(fmt.Errorf("task_ids[%d]: %v", i, err))
+			}
+			notifyServerEvent("task:deleted", map[string]string{"id": taskID, "project_id": pid})
+			deleted = append(deleted, taskID)
+		}
+		return marshal(map[string]interface{}{"deleted": deleted})
 	case "segments_get_task":
 		pid, err := resolveProjectIDForMCP(s, str("project_id"))
 		if err != nil {
