@@ -2172,8 +2172,8 @@ function handleWSMessage(msg) {
         } else {
           pushAgentLog('updated ' + Util.shortId(msg.data.id, 8) + ' ' + (msg.data.status || ''));
         }
-        sortAndRender();
-        if (msg.type === 'task:created') setTimeout(() => { delete Store.entering[msg.data.id]; render(); }, 900);
+        scheduleSortAndRender();
+        if (msg.type === 'task:created') setTimeout(() => { delete Store.entering[msg.data.id]; scheduleRender(); }, 900);
         setTimeout(() => { delete Store.pulse[msg.data.id]; }, 2000);
       } else if (!msg.data) {
         loadTasks();
@@ -2188,11 +2188,11 @@ function handleWSMessage(msg) {
             upsertTaskLocal(t);
             Store.entering[t.id] = now;
             pushAgentLog('created ' + Util.shortId(t.id, 8) + ' ' + (t.title || '').slice(0, 40));
-            setTimeout(((id) => () => { delete Store.entering[id]; render(); })(t.id), 900);
+            setTimeout(((id) => () => { delete Store.entering[id]; scheduleRender(); })(t.id), 900);
             changed = true;
           }
         }
-        if (changed) sortAndRender();
+        if (changed) scheduleSortAndRender();
       }
       break;
     case 'task:deleted':
@@ -2202,7 +2202,7 @@ function handleWSMessage(msg) {
         if (Store.selectedId === msg.data.id) Store.selectedId = null;
         if (Store.tasks.length !== before) {
           pushAgentLog('deleted ' + Util.shortId(msg.data.id, 8));
-          render();
+          scheduleRender();
         }
       } else {
         loadTasks();
@@ -2225,6 +2225,40 @@ function upsertTaskLocal(task) {
 function sortAndRender() {
   Store.tasks.sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
   render();
+}
+
+// rAF-coalesced render path for WS-driven updates. Under burst load (e.g.
+// stress.exe firing many task:created/updated messages per second) each
+// message would otherwise trigger a full app.innerHTML rebuild; batching
+// them into at most one rebuild per animation frame keeps the UI responsive.
+// User-driven events (click, keypress) still call render() synchronously so
+// input stays snappy.
+//
+// The setTimeout fallback covers the case where the tab is hidden or
+// backgrounded: browsers pause rAF in that state, so without a timer the
+// pending render would not land until the tab regained focus (visible as
+// "stale tasks linger after stress cleanup until I refresh"). First scheduler
+// to fire wins; the other path short-circuits on the _renderPending guard.
+let _renderPending = false;
+let _sortPending = false;
+function _flushScheduledRender() {
+  if (!_renderPending) return;
+  _renderPending = false;
+  if (_sortPending) {
+    _sortPending = false;
+    Store.tasks.sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+  }
+  render();
+}
+function scheduleRender() {
+  if (_renderPending) return;
+  _renderPending = true;
+  requestAnimationFrame(_flushScheduledRender);
+  setTimeout(_flushScheduledRender, 50);
+}
+function scheduleSortAndRender() {
+  _sortPending = true;
+  scheduleRender();
 }
 
 // ===================================================================
