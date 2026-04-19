@@ -2072,6 +2072,11 @@ const Util = {
       t.status === 'todo' && (!t.blocked_by || (byId[t.blocked_by] && byId[t.blocked_by].status === 'done'))
     );
   },
+  readyTree(tasks) {
+    return tasks.filter(t =>
+      t.status === 'todo' || t.status === 'in_progress' || t.status === 'blocker'
+    );
+  },
   esc(s) {
     return String(s == null ? '' : s)
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -2397,7 +2402,9 @@ const Actions = {
 // ===================================================================
 function filteredTasks() {
   let out = Store.tasks.slice();
-  if (Store.filter === 'ready') out = Util.ready(out);
+  if (Store.filter === 'ready') {
+    out = Store.view === 'graph' ? Util.readyTree(out) : Util.ready(out);
+  }
   if (Store.search) out = Util.fuzzy(Store.search, out);
   return out;
 }
@@ -2431,13 +2438,14 @@ const Graph = {
     const rankGap = opts.rankGap != null ? opts.rankGap : 0;
     const containerW = opts.containerW > 0 ? opts.containerW : Infinity;
 
+    const inScope = new Set(tasks.map(t => t.id));
     const rank = {};
     const visit = (id, seen) => {
       if (rank[id] !== undefined) return rank[id];
       if (seen.has(id)) return 0;
       seen.add(id);
       const t = byId[id];
-      const blk = t && t.blocked_by && byId[t.blocked_by] ? t.blocked_by : null;
+      const blk = t && t.blocked_by && inScope.has(t.blocked_by) ? t.blocked_by : null;
       const r = blk ? 1 + visit(blk, seen) : 0;
       rank[id] = r;
       return r;
@@ -2665,6 +2673,7 @@ function obsGraphView(T, tasks, byId) {
     containerW: Graph.containerWidth(),
   });
   const ready = new Set(Util.ready(Store.tasks).map(t => t.id));
+  const readyInView = tasks.reduce((n, t) => n + (ready.has(t.id) ? 1 : 0), 0);
   const sel = Store.selectedId;
   const edges = Graph.edges(tasks, byId).map(e => {
     const from = layout.pos[e.parent.id], to = layout.pos[e.child.id];
@@ -2691,13 +2700,14 @@ function obsGraphView(T, tasks, byId) {
       '</foreignObject>' +
     '</g>';
   }).join('');
+  const inTree = Store.filter === 'ready';
   return '<div class="graph">' +
     '<div class="graph-head">' +
       '<span>Dependency DAG \u00B7 top-down</span>' +
       '<span class="dot">\u00B7</span>' +
       '<span><span class="ready-dot">\u25CF</span> ready (no unresolved blockers)</span>' +
       '<span class="dot">\u00B7</span>' +
-      '<span>' + ready.size + ' ready / ' + tasks.length + ' total</span>' +
+      '<span>' + readyInView + ' ready / ' + tasks.length + (inTree ? ' in flight' : ' total') + '</span>' +
     '</div>' +
     '<svg class="graph-svg" width="' + layout.width + '" height="' + layout.height + '">' +
       '<defs><marker id="obs-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="arrow"></path></marker></defs>' +
@@ -3037,6 +3047,7 @@ function conGraphView(T, tasks, byId) {
     containerW: Graph.containerWidth(),
   });
   const ready = new Set(Util.ready(Store.tasks).map(t => t.id));
+  const readyInView = tasks.reduce((n, t) => n + (ready.has(t.id) ? 1 : 0), 0);
   const sel = Store.selectedId;
   const meta = T.statusMeta;
   const edges = Graph.edges(tasks, byId).map(e => {
@@ -3067,10 +3078,11 @@ function conGraphView(T, tasks, byId) {
       '</foreignObject>' +
     '</g>';
   }).join('');
+  const inTree = Store.filter === 'ready';
   return '<div class="graph">' +
     '<div class="graph-head">' +
-      '<span class="head-tag">DAG[' + tasks.length + ']</span>' +
-      '<span>topological \u00B7 top\u2192down</span>' +
+      '<span class="head-tag">' + (inTree ? 'TREE' : 'DAG') + '[' + tasks.length + ']</span>' +
+      '<span>topological \u00B7 top\u2192down \u00B7 ' + readyInView + ' ready</span>' +
       '<span><span class="d-ready">\u25CF</span> ready \u00B7 <span class="d-blk">\u25CF</span> blocked \u00B7 <span class="d-act">\u25CF</span> in-flight</span>' +
     '</div>' +
     '<svg class="graph-svg" width="' + layout.width + '" height="' + layout.height + '">' +
@@ -3407,6 +3419,7 @@ function dosGraphView(T, tasks, byId) {
     containerW: Graph.containerWidth(),
   });
   const ready = new Set(Util.ready(Store.tasks).map(t => t.id));
+  const readyInView = tasks.reduce((n, t) => n + (ready.has(t.id) ? 1 : 0), 0);
   const sel = Store.selectedId;
   const meta = T.statusMeta;
   const edges = Graph.edges(tasks, byId).map(e => {
@@ -3436,10 +3449,11 @@ function dosGraphView(T, tasks, byId) {
       '</foreignObject>' +
     '</g>';
   }).join('');
+  const inTree = Store.filter === 'ready';
   return '<div class="graph">' +
     '<div class="graph-head">' +
       '<div class="head-title">Lineage</div>' +
-      '<div class="head-sub">dependency graph \u00B7 ' + ready.size + ' of ' + tasks.length + ' ready</div>' +
+      '<div class="head-sub">dependency graph \u00B7 ' + readyInView + ' ready of ' + tasks.length + (inTree ? ' in flight' : ' total') + '</div>' +
     '</div>' +
     '<svg class="graph-svg" width="' + layout.width + '" height="' + layout.height + '">' +
       '<defs><marker id="dos-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="arrow"></path></marker></defs>' +
