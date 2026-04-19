@@ -465,6 +465,44 @@ body[data-theme="obsidian"] .view-stub {
 body[data-theme="obsidian"] .view-stub .big { font-size: 20px; color: var(--seg-text); font-weight: 500; }
 body[data-theme="obsidian"] .view-stub .hint { font-size: 12px; color: var(--seg-faint); font-family: var(--seg-font-mono); }
 
+/* graph view */
+body[data-theme="obsidian"] .graph {
+  flex: 1; overflow: auto; position: relative; background: var(--seg-bg);
+}
+body[data-theme="obsidian"] .graph-head {
+  position: sticky; top: 0; z-index: 2; background: var(--seg-bg);
+  display: flex; gap: 14px; padding: 10px 16px;
+  border-bottom: 1px solid var(--seg-line);
+  font-size: 11px; color: var(--seg-muted);
+}
+body[data-theme="obsidian"] .graph-head .dot { color: var(--seg-faint); }
+body[data-theme="obsidian"] .graph-head .ready-dot { color: var(--seg-accent); }
+body[data-theme="obsidian"] .graph-svg { display: block; }
+body[data-theme="obsidian"] .graph-svg .edge { fill: none; stroke: var(--seg-line2); stroke-width: 1; }
+body[data-theme="obsidian"] .graph-svg .arrow { fill: var(--seg-faint); }
+body[data-theme="obsidian"] .graph-svg .g-node { cursor: pointer; }
+body[data-theme="obsidian"] .graph-svg .g-node .bg { fill: var(--seg-surface); stroke: var(--seg-line2); stroke-width: 1; }
+body[data-theme="obsidian"] .graph-svg .g-node.sel .bg { fill: var(--seg-surface2); stroke: var(--seg-accent); }
+body[data-theme="obsidian"] .graph-svg .g-node.s-todo        .bar { fill: var(--seg-todo); }
+body[data-theme="obsidian"] .graph-svg .g-node.s-in_progress .bar { fill: var(--seg-inprog); }
+body[data-theme="obsidian"] .graph-svg .g-node.s-blocker     .bar { fill: var(--seg-blocker); }
+body[data-theme="obsidian"] .graph-svg .g-node.s-done        .bar { fill: var(--seg-done); }
+body[data-theme="obsidian"] .graph-svg .g-node.s-closed      .bar { fill: var(--seg-closed); }
+body[data-theme="obsidian"] .graph-svg .g-node .ring {
+  fill: none; stroke: var(--seg-accent); stroke-width: 1; opacity: 0.55;
+}
+body[data-theme="obsidian"] .graph-svg .g-meta {
+  fill: var(--seg-faint);
+  font: 9.5px/1 var(--seg-font-mono);
+  font-variant-numeric: tabular-nums;
+}
+body[data-theme="obsidian"] .graph-svg .g-title {
+  font: 11.5px/1.3 var(--seg-font);
+  color: var(--seg-text);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+body[data-theme="obsidian"] .graph-svg .g-node.s-closed .g-title { color: var(--seg-faint); }
+
 /* animations */
 @keyframes segPulse {
   0%   { box-shadow: 0 0 0 0 rgba(122,167,217,0.55); }
@@ -1046,6 +1084,50 @@ body[data-theme="console"] .view-stub {
 }
 body[data-theme="console"] .view-stub .big { font-size: 14px; color: var(--seg-amber); }
 body[data-theme="console"] .view-stub .hint { font-size: 10.5px; color: var(--seg-faint); }
+
+/* graph view */
+body[data-theme="console"] .graph {
+  flex: 1; overflow: auto; background: var(--seg-bg);
+  font-family: var(--seg-font-mono);
+}
+body[data-theme="console"] .graph-head {
+  position: sticky; top: 0; z-index: 2; background: var(--seg-bg);
+  display: flex; gap: 16px; padding: 9px 14px;
+  border-bottom: 1px dashed var(--seg-line);
+  font-size: 10.5px; color: var(--seg-muted);
+}
+body[data-theme="console"] .graph-head .head-tag { color: var(--seg-text); }
+body[data-theme="console"] .graph-head .d-ready { color: var(--seg-green); }
+body[data-theme="console"] .graph-head .d-blk   { color: var(--seg-red); }
+body[data-theme="console"] .graph-head .d-act   { color: var(--seg-amber); }
+body[data-theme="console"] .graph-svg { display: block; }
+body[data-theme="console"] .graph-svg .edge { fill: none; }
+body[data-theme="console"] .graph-svg .edge.open    { stroke: var(--seg-line2); stroke-width: 1; stroke-dasharray: 2 2; }
+body[data-theme="console"] .graph-svg .edge.blocked { stroke: var(--seg-red);  stroke-width: 1.2; }
+body[data-theme="console"] .graph-svg .arrow.open    { fill: var(--seg-line2); }
+body[data-theme="console"] .graph-svg .arrow.blocked { fill: var(--seg-red); }
+body[data-theme="console"] .graph-svg .g-node { cursor: pointer; }
+body[data-theme="console"] .graph-svg .g-node .bg {
+  fill: var(--seg-surface); stroke: var(--seg-line2); stroke-width: 1;
+}
+body[data-theme="console"] .graph-svg .g-node.sel .bg { fill: var(--seg-surface2); stroke: var(--seg-amber); }
+body[data-theme="console"] .graph-svg .g-node.s-todo        .bar { stroke: var(--seg-todo);    stroke-width: 1.5; }
+body[data-theme="console"] .graph-svg .g-node.s-in_progress .bar { stroke: var(--seg-inprog);  stroke-width: 1.5; }
+body[data-theme="console"] .graph-svg .g-node.s-blocker     .bar { stroke: var(--seg-blocker); stroke-width: 1.5; }
+body[data-theme="console"] .graph-svg .g-node.s-done        .bar { stroke: var(--seg-done);    stroke-width: 1.5; }
+body[data-theme="console"] .graph-svg .g-node.s-closed      .bar { stroke: var(--seg-closed);  stroke-width: 1.5; }
+body[data-theme="console"] .graph-svg .g-node .ring {
+  fill: none; stroke: var(--seg-green); stroke-width: 1; stroke-dasharray: 3 3;
+}
+body[data-theme="console"] .graph-svg .g-meta {
+  fill: var(--seg-muted);
+  font: 9px/1 var(--seg-font-mono);
+}
+body[data-theme="console"] .graph-svg .g-title {
+  font: 11px/1.3 var(--seg-font-body, var(--seg-font-mono));
+  color: var(--seg-text);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
 
 /* console animations */
 @keyframes segBlink { 0%,49% { opacity: 1; } 50%,100% { opacity: 0.1; } }
@@ -1771,6 +1853,56 @@ body[data-theme="dossier"] .view-stub .hint {
   color: var(--seg-faint); text-transform: uppercase;
 }
 
+/* graph view (Lineage) */
+body[data-theme="dossier"] .graph {
+  flex: 1; overflow: auto; background: var(--seg-bg);
+}
+body[data-theme="dossier"] .graph-head {
+  position: sticky; top: 0; z-index: 2; background: var(--seg-bg);
+  padding: 16px 24px 10px;
+  border-bottom: 1px solid var(--seg-rule);
+}
+body[data-theme="dossier"] .graph-head .head-title {
+  font-family: var(--seg-font-serif);
+  font-size: 24px; color: var(--seg-text);
+  font-style: italic; letter-spacing: -0.3px;
+}
+body[data-theme="dossier"] .graph-head .head-sub {
+  font-family: var(--seg-font); font-size: 10px; color: var(--seg-muted);
+  letter-spacing: 1.2px; text-transform: uppercase; margin-top: 4px;
+}
+body[data-theme="dossier"] .graph-svg { display: block; }
+body[data-theme="dossier"] .graph-svg .edge { fill: none; }
+body[data-theme="dossier"] .graph-svg .edge.open    { stroke: var(--seg-rule2); stroke-width: 0.75; stroke-dasharray: 3 4; }
+body[data-theme="dossier"] .graph-svg .edge.blocked { stroke: var(--seg-accent); stroke-width: 1.5; }
+body[data-theme="dossier"] .graph-svg .arrow { fill: var(--seg-rule2); }
+body[data-theme="dossier"] .graph-svg .g-node { cursor: pointer; }
+body[data-theme="dossier"] .graph-svg .g-node .bg {
+  fill: var(--seg-bg); stroke: var(--seg-rule2); stroke-width: 0.5;
+}
+body[data-theme="dossier"] .graph-svg .g-node.sel .bg {
+  fill: var(--seg-surface); stroke: var(--seg-text); stroke-width: 1.5;
+}
+body[data-theme="dossier"] .graph-svg .g-node.s-todo        .bar { stroke: var(--seg-todo);    stroke-width: 1; }
+body[data-theme="dossier"] .graph-svg .g-node.s-in_progress .bar { stroke: var(--seg-inprog);  stroke-width: 1; }
+body[data-theme="dossier"] .graph-svg .g-node.s-blocker     .bar { stroke: var(--seg-blocker); stroke-width: 1; }
+body[data-theme="dossier"] .graph-svg .g-node.s-done        .bar { stroke: var(--seg-done);    stroke-width: 1; }
+body[data-theme="dossier"] .graph-svg .g-node.s-closed      .bar { stroke: var(--seg-closed);  stroke-width: 1; }
+body[data-theme="dossier"] .graph-svg .g-node .ring {
+  fill: none; stroke: var(--seg-accent); stroke-width: 0.75; stroke-dasharray: 2 3;
+}
+body[data-theme="dossier"] .graph-svg .g-meta {
+  fill: var(--seg-muted);
+  font: 8.5px/1 var(--seg-font);
+  letter-spacing: 1px;
+}
+body[data-theme="dossier"] .graph-svg .g-title {
+  font: italic 13px/1.25 var(--seg-font-serif);
+  color: var(--seg-text);
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
+body[data-theme="dossier"] .graph-svg .g-node.s-closed .g-title { color: var(--seg-faint); }
+
 /* dossier animations */
 @keyframes segBlinkC { 0%,100% { opacity: 0.4; } 50% { opacity: 1; } }
 @keyframes segInkFadeC { 0%,100% { opacity: 0.55; } 50% { opacity: 1; } }
@@ -1879,6 +2011,7 @@ const Store = {
   pulse: {},                     // id -> timestamp for pulse animation
   entering: {},                  // id -> timestamp for enter animation
   agentLog: [],                  // rolling log of WS events for console theme tail
+  _graphContentW: 0,             // measured .content width; drives graph wrapping
 };
 
 function pushAgentLog(msg) {
@@ -2221,7 +2354,7 @@ const Actions = {
     const i = filtered.findIndex(t => t.id === Store.selectedId);
     const next = dir > 0 ? Math.min(filtered.length - 1, (i < 0 ? 0 : i + 1))
                          : Math.max(0, (i < 0 ? 0 : i - 1));
-    Store.selectedId = filtered[next].id; render({ scrollTo: '.row.selected' });
+    Store.selectedId = filtered[next].id; render({ scrollTo: '.row.selected, .g-node.sel' });
   },
 };
 
@@ -2246,6 +2379,96 @@ function groupedByStatus(tasks) {
   tasks.forEach(t => { if (buckets[t.status]) buckets[t.status].push(t); });
   return order.filter(s => buckets[s].length).map(s => ({ key: s, items: buckets[s] }));
 }
+
+// ===================================================================
+// Shared dependency-graph layout. Rank = longest path from a root; roots
+// have rank 0. Within a rank, nodes flow left to right and wrap to a new
+// visual row when they exceed containerW so the DAG fits without forcing
+// huge horizontal scroll on small screens. Wide screens with few nodes
+// per rank get a single row and use the extra space naturally.
+// Returns { pos: {id: {x,y,r,sub}}, W, H, width, height, ranks }.
+// ===================================================================
+const Graph = {
+  layout(tasks, byId, opts) {
+    const W = opts.W, H = opts.H;
+    const gapX = opts.gapX, gapY = opts.gapY;
+    const padX = opts.padX != null ? opts.padX : 40;
+    const padY = opts.padY != null ? opts.padY : 40;
+    const rankGap = opts.rankGap != null ? opts.rankGap : 0;
+    const containerW = opts.containerW > 0 ? opts.containerW : Infinity;
+
+    const rank = {};
+    const visit = (id, seen) => {
+      if (rank[id] !== undefined) return rank[id];
+      if (seen.has(id)) return 0;
+      seen.add(id);
+      const t = byId[id];
+      const blk = t && t.blocked_by && byId[t.blocked_by] ? t.blocked_by : null;
+      const r = blk ? 1 + visit(blk, seen) : 0;
+      rank[id] = r;
+      return r;
+    };
+    tasks.forEach(t => visit(t.id, new Set()));
+
+    const rows = {};
+    tasks.forEach(t => {
+      const r = rank[t.id] || 0;
+      (rows[r] = rows[r] || []).push(t);
+    });
+
+    const usable = containerW - 2 * padX + gapX;
+    const maxCols = Math.max(1, Math.floor(usable / (W + gapX)));
+
+    const keys = Object.keys(rows).map(Number).sort((a, b) => a - b);
+    const pos = {};
+    let yCursor = padY;
+    keys.forEach(r => {
+      rows[r].sort((a, b) => (a.priority - b.priority) || a.id.localeCompare(b.id));
+      const cols = Math.min(maxCols, rows[r].length);
+      rows[r].forEach((t, i) => {
+        const col = i % cols;
+        const sub = Math.floor(i / cols);
+        pos[t.id] = {
+          x: padX + col * (W + gapX),
+          y: yCursor + sub * (H + gapY),
+          r: r,
+          sub: sub,
+        };
+      });
+      const subRows = Math.ceil(rows[r].length / cols);
+      yCursor += subRows * (H + gapY) + rankGap;
+    });
+
+    const xs = Object.values(pos).map(p => p.x + W);
+    const width = (xs.length ? Math.max.apply(null, xs) : padX) + padX;
+    const height = (keys.length ? yCursor : padY) + padY - rankGap;
+    return { pos: pos, W: W, H: H, width: width, height: height, ranks: keys.length };
+  },
+  // edges: returns [{child, parent, blocked}] for tasks with blocked_by.
+  edges(tasks, byId) {
+    const out = [];
+    tasks.forEach(t => {
+      if (!t.blocked_by) return;
+      const parent = byId[t.blocked_by];
+      if (!parent) return;
+      out.push({ child: t, parent: parent, blocked: parent.status !== 'done' });
+    });
+    return out;
+  },
+  // Estimated width of the .content area. Uses the previously-measured
+  // value if available (set by render() after DOM insertion), otherwise
+  // falls back to viewport math. The render() pass remeasures and
+  // re-renders once if the estimate was off.
+  containerWidth() {
+    if (Store && Store._graphContentW > 0) return Store._graphContentW;
+    if (typeof window === 'undefined') return 1024;
+    const w = window.innerWidth;
+    let avail = w;
+    if (w > 720) avail -= (w > 1100 ? 230 : 180);
+    if (Store && Store.selectedId && w > 900) avail -= (w > 1100 ? 400 : 340);
+    return Math.max(360, avail - 20);
+  },
+};
 
 // ===================================================================
 // Theme: Obsidian (Direction A) — implemented
@@ -2289,7 +2512,7 @@ function obsTopbar(T) {
   const tabs = [
     { id: 'list',   label: 'List',   hint: 'G L', enabled: true },
     { id: 'kanban', label: 'Kanban', hint: 'G K', enabled: false },
-    { id: 'graph',  label: 'Graph',  hint: 'G G', enabled: false },
+    { id: 'graph',  label: 'Graph',  hint: 'G G', enabled: true },
   ];
   return '<div class="topbar" role="banner">' +
     '<div class="brand">' +
@@ -2385,13 +2608,69 @@ function obsComposer(T) {
 }
 
 function obsMainView(T, tasks, byId) {
-  if (Store.view === 'kanban' || Store.view === 'graph') {
+  if (Store.view === 'kanban') {
     return '<div class="view-stub">' +
-      '<div class="big">' + (Store.view === 'kanban' ? 'Kanban' : 'Graph') + ' view</div>' +
+      '<div class="big">Kanban view</div>' +
       '<div class="hint">coming in a follow-up task</div>' +
     '</div>';
   }
+  if (Store.view === 'graph') return obsGraphView(T, tasks, byId);
   return obsListView(T, tasks, byId);
+}
+
+function obsGraphView(T, tasks, byId) {
+  if (!tasks.length) {
+    return '<div class="graph"><div class="empty">' +
+      (Store.activeProjectId
+        ? 'No tasks' + (Store.search ? ' match \u201C' + Util.esc(Store.search) + '\u201D' : '') + '. Press <kbd>c</kbd> to create.'
+        : 'Select or create a project to get started.') +
+    '</div></div>';
+  }
+  const layout = Graph.layout(tasks, byId, {
+    W: 168, H: 62, gapX: 22, gapY: 34, padX: 28, padY: 28, rankGap: 14,
+    containerW: Graph.containerWidth(),
+  });
+  const ready = new Set(Util.ready(Store.tasks).map(t => t.id));
+  const sel = Store.selectedId;
+  const edges = Graph.edges(tasks, byId).map(e => {
+    const from = layout.pos[e.parent.id], to = layout.pos[e.child.id];
+    if (!from || !to) return '';
+    const x1 = from.x + layout.W / 2, y1 = from.y + layout.H;
+    const x2 = to.x + layout.W / 2, y2 = to.y;
+    const mid = (y1 + y2) / 2;
+    return '<path class="edge" d="M ' + x1 + ' ' + y1 + ' C ' + x1 + ' ' + mid + ' ' + x2 + ' ' + mid + ' ' + x2 + ' ' + y2 + '" marker-end="url(#obs-arrow)"></path>';
+  }).join('');
+  const nodes = tasks.map(t => {
+    const p = layout.pos[t.id]; if (!p) return '';
+    const isReady = ready.has(t.id);
+    const isSel = sel === t.id;
+    const cls = ['g-node', 's-' + t.status];
+    if (isSel) cls.push('sel');
+    if (isReady) cls.push('ready');
+    return '<g class="' + cls.join(' ') + '" data-act="select" data-id="' + Util.esc(t.id) + '" transform="translate(' + p.x + ',' + p.y + ')">' +
+      (isReady ? '<rect class="ring" x="-3" y="-3" width="' + (layout.W + 6) + '" height="' + (layout.H + 6) + '" rx="8"></rect>' : '') +
+      '<rect class="bg" width="' + layout.W + '" height="' + layout.H + '" rx="6"></rect>' +
+      '<rect class="bar" width="3" height="' + layout.H + '" rx="1.5"></rect>' +
+      '<text class="g-meta" x="14" y="20">' + Util.esc(Util.shortId(t.id, 8)) + ' \u00B7 P' + t.priority + '</text>' +
+      '<foreignObject x="14" y="24" width="' + (layout.W - 24) + '" height="' + (layout.H - 28) + '">' +
+        '<div xmlns="http://www.w3.org/1999/xhtml" class="g-title">' + Util.esc(t.title) + '</div>' +
+      '</foreignObject>' +
+    '</g>';
+  }).join('');
+  return '<div class="graph">' +
+    '<div class="graph-head">' +
+      '<span>Dependency DAG \u00B7 top-down</span>' +
+      '<span class="dot">\u00B7</span>' +
+      '<span><span class="ready-dot">\u25CF</span> ready (no unresolved blockers)</span>' +
+      '<span class="dot">\u00B7</span>' +
+      '<span>' + ready.size + ' ready / ' + tasks.length + ' total</span>' +
+    '</div>' +
+    '<svg class="graph-svg" width="' + layout.width + '" height="' + layout.height + '">' +
+      '<defs><marker id="obs-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="arrow"></path></marker></defs>' +
+      edges +
+      nodes +
+    '</svg>' +
+  '</div>';
 }
 
 function obsListView(T, tasks, byId) {
@@ -2579,7 +2858,7 @@ function conTopbar(T) {
   const tabs = [
     { id: 'list',   label: 'LIST',   hint: 'gl', enabled: true },
     { id: 'kanban', label: 'KANBAN', hint: 'gk', enabled: false },
-    { id: 'graph',  label: 'GRAPH',  hint: 'gg', enabled: false },
+    { id: 'graph',  label: 'GRAPH',  hint: 'gg', enabled: true },
   ];
   return '<div class="topbar" role="banner">' +
     '<div class="brand">' +
@@ -2701,13 +2980,74 @@ function conComposer(T) {
 }
 
 function conMainView(T, tasks, byId) {
-  if (Store.view === 'kanban' || Store.view === 'graph') {
+  if (Store.view === 'kanban') {
     return '<div class="view-stub">' +
-      '<div class="big">' + (Store.view === 'kanban' ? 'KANBAN' : 'GRAPH') + '</div>' +
+      '<div class="big">KANBAN</div>' +
       '<div class="hint">// coming in a follow-up task</div>' +
     '</div>';
   }
+  if (Store.view === 'graph') return conGraphView(T, tasks, byId);
   return conListView(T, tasks, byId);
+}
+
+function conGraphView(T, tasks, byId) {
+  if (!tasks.length) {
+    return '<div class="graph"><div class="empty">' +
+      (Store.activeProjectId
+        ? '$ no tasks' + (Store.search ? ' match \u201C' + Util.esc(Store.search) + '\u201D' : '') + '. press <kbd>c</kbd> to create.'
+        : '$ select or create a project to get started.') +
+    '</div></div>';
+  }
+  const layout = Graph.layout(tasks, byId, {
+    W: 168, H: 58, gapX: 18, gapY: 30, padX: 20, padY: 20, rankGap: 12,
+    containerW: Graph.containerWidth(),
+  });
+  const ready = new Set(Util.ready(Store.tasks).map(t => t.id));
+  const sel = Store.selectedId;
+  const meta = T.statusMeta;
+  const edges = Graph.edges(tasks, byId).map(e => {
+    const from = layout.pos[e.parent.id], to = layout.pos[e.child.id];
+    if (!from || !to) return '';
+    const x1 = from.x + layout.W / 2, y1 = from.y + layout.H;
+    const x2 = to.x + layout.W / 2, y2 = to.y;
+    const mid = (y1 + y2) / 2;
+    const cls = 'edge ' + (e.blocked ? 'blocked' : 'open');
+    const marker = e.blocked ? 'con-arrow-r' : 'con-arrow';
+    return '<path class="' + cls + '" d="M ' + x1 + ' ' + y1 + ' L ' + x1 + ' ' + mid + ' L ' + x2 + ' ' + mid + ' L ' + x2 + ' ' + y2 + '" marker-end="url(#' + marker + ')"></path>';
+  }).join('');
+  const nodes = tasks.map(t => {
+    const p = layout.pos[t.id]; if (!p) return '';
+    const isReady = ready.has(t.id);
+    const isSel = sel === t.id;
+    const cls = ['g-node', 's-' + t.status];
+    if (isSel) cls.push('sel');
+    if (isReady) cls.push('ready');
+    const sm = meta[t.status] || { glyph: '[?]' };
+    return '<g class="' + cls.join(' ') + '" data-act="select" data-id="' + Util.esc(t.id) + '" transform="translate(' + p.x + ',' + p.y + ')">' +
+      (isReady ? '<rect class="ring" x="-2" y="-2" width="' + (layout.W + 4) + '" height="' + (layout.H + 4) + '"></rect>' : '') +
+      '<rect class="bg" width="' + layout.W + '" height="' + layout.H + '"></rect>' +
+      '<text class="g-meta" x="10" y="14">' + Util.esc(Util.shortId(t.id, 8)) + ' \u00B7 P' + t.priority + ' \u00B7 ' + Util.esc(sm.glyph) + '</text>' +
+      '<line class="bar" x1="0" y1="22" x2="' + layout.W + '" y2="22"></line>' +
+      '<foreignObject x="10" y="26" width="' + (layout.W - 20) + '" height="' + (layout.H - 30) + '">' +
+        '<div xmlns="http://www.w3.org/1999/xhtml" class="g-title">' + Util.esc(t.title) + '</div>' +
+      '</foreignObject>' +
+    '</g>';
+  }).join('');
+  return '<div class="graph">' +
+    '<div class="graph-head">' +
+      '<span class="head-tag">DAG[' + tasks.length + ']</span>' +
+      '<span>topological \u00B7 top\u2192down</span>' +
+      '<span><span class="d-ready">\u25CF</span> ready \u00B7 <span class="d-blk">\u25CF</span> blocked \u00B7 <span class="d-act">\u25CF</span> in-flight</span>' +
+    '</div>' +
+    '<svg class="graph-svg" width="' + layout.width + '" height="' + layout.height + '">' +
+      '<defs>' +
+        '<marker id="con-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="arrow open"></path></marker>' +
+        '<marker id="con-arrow-r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="arrow blocked"></path></marker>' +
+      '</defs>' +
+      edges +
+      nodes +
+    '</svg>' +
+  '</div>';
 }
 
 function conListView(T, tasks, byId) {
@@ -2897,7 +3237,7 @@ function dosTopbar(T, counts, readyCount) {
   const tabs = [
     { id: 'list',   label: 'List',    hint: 'gl', enabled: true },
     { id: 'kanban', label: 'Board',   hint: 'gk', enabled: false },
-    { id: 'graph',  label: 'Lineage', hint: 'gg', enabled: false },
+    { id: 'graph',  label: 'Lineage', hint: 'gg', enabled: true },
   ];
   return '<div class="topbar" role="banner">' +
     '<div class="dossier-masthead">' +
@@ -3010,13 +3350,69 @@ function dosComposer(T) {
 }
 
 function dosMainView(T, tasks, byId) {
-  if (Store.view === 'kanban' || Store.view === 'graph') {
+  if (Store.view === 'kanban') {
     return '<div class="view-stub">' +
-      '<div class="big">' + (Store.view === 'kanban' ? 'Board' : 'Lineage') + '</div>' +
+      '<div class="big">Board</div>' +
       '<div class="hint">\u2014 coming in a follow-up \u2014</div>' +
     '</div>';
   }
+  if (Store.view === 'graph') return dosGraphView(T, tasks, byId);
   return dosListView(T, tasks, byId);
+}
+
+function dosGraphView(T, tasks, byId) {
+  if (!tasks.length) {
+    return '<div class="graph"><div class="empty">' +
+      (Store.activeProjectId
+        ? '\u2014 No entries' + (Store.search ? ' matching \u201C' + Util.esc(Store.search) + '\u201D' : '') + '. Press c to compose. \u2014'
+        : '\u2014 Select or create a project to get started. \u2014') +
+    '</div></div>';
+  }
+  const layout = Graph.layout(tasks, byId, {
+    W: 188, H: 74, gapX: 28, gapY: 44, padX: 32, padY: 24, rankGap: 18,
+    containerW: Graph.containerWidth(),
+  });
+  const ready = new Set(Util.ready(Store.tasks).map(t => t.id));
+  const sel = Store.selectedId;
+  const meta = T.statusMeta;
+  const edges = Graph.edges(tasks, byId).map(e => {
+    const from = layout.pos[e.parent.id], to = layout.pos[e.child.id];
+    if (!from || !to) return '';
+    const x1 = from.x + layout.W / 2, y1 = from.y + layout.H;
+    const x2 = to.x + layout.W / 2, y2 = to.y;
+    const mid = (y1 + y2) / 2;
+    const cls = 'edge ' + (e.blocked ? 'blocked' : 'open');
+    return '<path class="' + cls + '" d="M ' + x1 + ' ' + y1 + ' C ' + x1 + ' ' + mid + ' ' + x2 + ' ' + mid + ' ' + x2 + ' ' + y2 + '" marker-end="url(#dos-arrow)"></path>';
+  }).join('');
+  const nodes = tasks.map(t => {
+    const p = layout.pos[t.id]; if (!p) return '';
+    const isReady = ready.has(t.id);
+    const isSel = sel === t.id;
+    const cls = ['g-node', 's-' + t.status];
+    if (isSel) cls.push('sel');
+    if (isReady) cls.push('ready');
+    const sm = meta[t.status] || { label: '?' };
+    return '<g class="' + cls.join(' ') + '" data-act="select" data-id="' + Util.esc(t.id) + '" transform="translate(' + p.x + ',' + p.y + ')">' +
+      (isReady ? '<rect class="ring" x="-4" y="-4" width="' + (layout.W + 8) + '" height="' + (layout.H + 8) + '"></rect>' : '') +
+      '<rect class="bg" width="' + layout.W + '" height="' + layout.H + '"></rect>' +
+      '<text class="g-meta" x="12" y="14">' + Util.esc(Util.shortId(t.id, 8)) + ' \u00B7 P' + t.priority + ' \u00B7 ' + Util.esc(sm.label.toUpperCase()) + '</text>' +
+      '<line class="bar" x1="12" y1="20" x2="' + (layout.W - 12) + '" y2="20"></line>' +
+      '<foreignObject x="12" y="24" width="' + (layout.W - 24) + '" height="' + (layout.H - 30) + '">' +
+        '<div xmlns="http://www.w3.org/1999/xhtml" class="g-title">' + Util.esc(t.title) + '</div>' +
+      '</foreignObject>' +
+    '</g>';
+  }).join('');
+  return '<div class="graph">' +
+    '<div class="graph-head">' +
+      '<div class="head-title">Lineage</div>' +
+      '<div class="head-sub">dependency graph \u00B7 ' + ready.size + ' of ' + tasks.length + ' ready</div>' +
+    '</div>' +
+    '<svg class="graph-svg" width="' + layout.width + '" height="' + layout.height + '">' +
+      '<defs><marker id="dos-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="arrow"></path></marker></defs>' +
+      edges +
+      nodes +
+    '</svg>' +
+  '</div>';
 }
 
 function dosListView(T, tasks, byId) {
@@ -3237,6 +3633,20 @@ function render(opts) {
       }
     }
   }
+  // Graph view is laid out using the measured .content width so wrap-on-narrow
+  // works without horizontal scroll. The first render uses an estimate; once
+  // the DOM is in place we measure and re-render once if the estimate was off.
+  if (Store.view === 'graph' && typeof requestAnimationFrame === 'function') {
+    requestAnimationFrame(() => {
+      const content = document.querySelector('.content');
+      if (!content) return;
+      const w = content.clientWidth;
+      if (w > 0 && Math.abs(w - Store._graphContentW) > 8) {
+        Store._graphContentW = w;
+        render();
+      }
+    });
+  }
 }
 
 function applyTheme() {
@@ -3456,6 +3866,18 @@ async function loadServerConfig() {
     if (c && c.version) { Store.version = c.version; render(); }
   } catch (e) {}
 }
+
+// Re-flow the graph when the window resizes. The post-render measurement
+// pass picks up the new .content width on the next render.
+let __resizeTimer = null;
+window.addEventListener('resize', () => {
+  if (Store.view !== 'graph') return;
+  clearTimeout(__resizeTimer);
+  __resizeTimer = setTimeout(() => {
+    Store._graphContentW = 0;
+    render();
+  }, 120);
+});
 
 applyTheme();
 render();
