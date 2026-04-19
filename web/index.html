@@ -56,6 +56,7 @@ body[data-theme="obsidian"] {
   --seg-blocker: #d97a7a;
   --seg-done: #7ac28a;
   --seg-closed: #4a4a47;
+  --seg-warn: #d4a857;
   --seg-pri0: #d97a7a;
   --seg-pri1: #e0b675;
   --seg-pri2: #7aa7d9;
@@ -82,6 +83,7 @@ body[data-theme="obsidian"][data-mode="light"] {
   --seg-blocker: #b04545;
   --seg-done: #2f7d45;
   --seg-closed: #aaaaa5;
+  --seg-warn: #b8841f;
   --seg-glow: 0 0 0 1px rgba(46,90,138,0.35), 0 0 20px rgba(46,90,138,0.10);
   --seg-scroll: rgba(0,0,0,0.12);
   --seg-scroll-hover: rgba(0,0,0,0.22);
@@ -176,7 +178,7 @@ body[data-theme="obsidian"] .theme-select {
 body[data-theme="obsidian"] .theme-select:hover { color: var(--seg-text); }
 
 /* body layout */
-body[data-theme="obsidian"] .main { display: flex; flex: 1; min-height: 0; }
+body[data-theme="obsidian"] .main { display: flex; flex: 1; min-height: 0; position: relative; }
 
 /* sidebar */
 body[data-theme="obsidian"] .sidebar {
@@ -357,12 +359,18 @@ body[data-theme="obsidian"] .empty {
   color: var(--seg-faint); text-align: center; padding: 60px 20px; font-size: 13px;
 }
 
-/* detail panel */
+/* detail panel — overlays content so opening/closing doesn't reflow the view */
 body[data-theme="obsidian"] .detail {
-  width: 380px; flex-shrink: 0; border-left: 1px solid var(--seg-line);
-  background: var(--seg-bg); overflow: auto;
+  position: absolute; top: 0; right: 0; bottom: 0;
+  width: 380px; z-index: 50;
+  border-left: 1px solid var(--seg-line);
+  background: var(--seg-bg); overflow: hidden auto;
   display: flex; flex-direction: column;
+  box-shadow: -16px 0 36px rgba(0,0,0,0.55);
 }
+body[data-theme="obsidian"] .detail-body { overflow-wrap: anywhere; word-break: break-word; }
+body[data-theme="obsidian"] .detail-meta .val { overflow-wrap: anywhere; min-width: 0; }
+body[data-theme="obsidian"] .detail-meta select { max-width: 100%; }
 body[data-theme="obsidian"] .detail-head {
   padding: 12px 18px; border-bottom: 1px solid var(--seg-line);
   display: flex; justify-content: space-between; align-items: center;
@@ -469,6 +477,9 @@ body[data-theme="obsidian"] .view-stub .hint { font-size: 12px; color: var(--seg
 body[data-theme="obsidian"] .graph {
   flex: 1; overflow: auto; position: relative; background: var(--seg-bg);
 }
+/* When the detail panel is open it overlays ~380px on the right; pad the
+   graph's scrollable area so the user can scroll right to peek under it. */
+body[data-theme="obsidian"] .graph.has-detail { padding-right: 400px; }
 body[data-theme="obsidian"] .graph-head {
   position: sticky; top: 0; z-index: 2; background: var(--seg-bg);
   display: flex; gap: 14px; padding: 10px 16px;
@@ -478,22 +489,61 @@ body[data-theme="obsidian"] .graph-head {
 body[data-theme="obsidian"] .graph-head .dot { color: var(--seg-faint); }
 body[data-theme="obsidian"] .graph-head .ready-dot { color: var(--seg-accent); }
 body[data-theme="obsidian"] .graph-svg { display: block; }
-body[data-theme="obsidian"] .graph-svg .edge { fill: none; stroke: var(--seg-line2); stroke-width: 1; }
-body[data-theme="obsidian"] .graph-svg .arrow { fill: var(--seg-faint); }
-body[data-theme="obsidian"] .graph-svg .g-node { cursor: pointer; }
+body[data-theme="obsidian"] .graph-svg .g-bg { fill: transparent; pointer-events: all; cursor: default; }
+body[data-theme="obsidian"] .graph-svg .edge { fill: none; pointer-events: none; transition: opacity 160ms ease; }
+body[data-theme="obsidian"] .graph-svg .edge.open    { stroke: var(--seg-line2); stroke-width: 1; }
+body[data-theme="obsidian"] .graph-svg .edge.blocked { stroke: var(--seg-blocker); stroke-width: 1.4; }
+body[data-theme="obsidian"] .graph-svg .arrow.open    { fill: var(--seg-faint); }
+body[data-theme="obsidian"] .graph-svg .arrow.blocked { fill: var(--seg-blocker); }
+body[data-theme="obsidian"] .graph-svg .edge.off { opacity: 0.10; }
+body[data-theme="obsidian"] .graph-svg .g-node { cursor: pointer; transition: opacity 160ms ease; }
+body[data-theme="obsidian"] .graph-svg .g-node.off { opacity: 0.20; }
 body[data-theme="obsidian"] .graph-svg .g-node .bg { fill: var(--seg-surface); stroke: var(--seg-line2); stroke-width: 1; }
-body[data-theme="obsidian"] .graph-svg .g-node.sel .bg { fill: var(--seg-surface2); stroke: var(--seg-accent); }
 body[data-theme="obsidian"] .graph-svg .g-node.s-todo        .bar { fill: var(--seg-todo); }
 body[data-theme="obsidian"] .graph-svg .g-node.s-in_progress .bar { fill: var(--seg-inprog); }
 body[data-theme="obsidian"] .graph-svg .g-node.s-blocker     .bar { fill: var(--seg-blocker); }
 body[data-theme="obsidian"] .graph-svg .g-node.s-done        .bar { fill: var(--seg-done); }
 body[data-theme="obsidian"] .graph-svg .g-node.s-closed      .bar { fill: var(--seg-closed); }
+/* Blocker status emphasis: tinted fill + dashed accent border */
+body[data-theme="obsidian"] .graph-svg .g-node.s-blocker .bg {
+  fill: rgba(217,122,122,0.06);
+  stroke: var(--seg-blocker);
+  stroke-width: 1.3;
+  stroke-dasharray: 4 2.5;
+}
+/* P1 priority emphasis: thicker outline for urgent nodes */
+body[data-theme="obsidian"] .graph-svg .g-node.p-1 .bg { stroke-width: 1.5; }
+/* "Currently blocking other work" emphasis: warm amber border + secondary
+   left ribbon next to the status bar + bold tag in meta line. Amber is
+   chosen over accent (which would clash with selection) and over blocker
+   red (which is reserved for status=blocker). */
+body[data-theme="obsidian"] .graph-svg .g-node.is-blocking .bg {
+  stroke: var(--seg-warn); stroke-width: 1.5; stroke-dasharray: none;
+}
+body[data-theme="obsidian"] .graph-svg .g-node.is-blocking .bar2 { fill: var(--seg-warn); }
+/* Selection outline overrides others */
+body[data-theme="obsidian"] .graph-svg .g-node.sel .bg {
+  fill: var(--seg-surface2); stroke: var(--seg-accent); stroke-width: 1.8; stroke-dasharray: none;
+}
 body[data-theme="obsidian"] .graph-svg .g-node .ring {
   fill: none; stroke: var(--seg-accent); stroke-width: 1; opacity: 0.55;
 }
 body[data-theme="obsidian"] .graph-svg .g-meta {
   fill: var(--seg-faint);
   font: 9.5px/1 var(--seg-font-mono);
+  font-variant-numeric: tabular-nums;
+}
+body[data-theme="obsidian"] .graph-svg .g-pri {
+  font: 600 9.5px/1 var(--seg-font-mono);
+  font-variant-numeric: tabular-nums;
+  fill: var(--seg-faint);
+}
+body[data-theme="obsidian"] .graph-svg .g-pri.p-1 { fill: var(--seg-blocker); }
+body[data-theme="obsidian"] .graph-svg .g-pri.p-2 { fill: var(--seg-accent); }
+body[data-theme="obsidian"] .graph-svg .g-pri.p-3 { fill: var(--seg-faint); opacity: 0.7; }
+body[data-theme="obsidian"] .graph-svg .g-meta .g-deps {
+  fill: var(--seg-warn);
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
 body[data-theme="obsidian"] .graph-svg .g-title {
@@ -570,11 +620,7 @@ body[data-theme="obsidian"] .side-item.ready-active .pill {
     gap: 8px; padding: 9px 12px;
   }
   body[data-theme="obsidian"] .blocker-chip { display: none; }
-  body[data-theme="obsidian"] .detail {
-    position: absolute; right: 0; top: 0; bottom: 0;
-    width: min(420px, 100%); z-index: 50;
-    box-shadow: -12px 0 32px rgba(0,0,0,0.35);
-  }
+  body[data-theme="obsidian"] .detail { width: min(420px, 100%); }
 }
 /* responsive: mobile-ish (<=720px) */
 @media (max-width: 720px) {
@@ -749,7 +795,7 @@ body[data-theme="console"] .topbar-stats .c-ready   { color: var(--seg-green); }
 body[data-theme="console"] .topbar-stats .c-last    { color: var(--seg-amber); }
 
 /* main / sidebar */
-body[data-theme="console"] .main { display: flex; flex: 1; min-height: 0; }
+body[data-theme="console"] .main { display: flex; flex: 1; min-height: 0; position: relative; }
 body[data-theme="console"] .sidebar {
   width: 220px; border-right: 1px solid var(--seg-line);
   display: flex; flex-direction: column; flex-shrink: 0;
@@ -960,13 +1006,19 @@ body[data-theme="console"] .empty {
   font-size: 12px; font-family: var(--seg-font-mono);
 }
 
-/* detail panel */
+/* detail panel — overlays content so opening/closing doesn't reflow the view */
 body[data-theme="console"] .detail {
-  width: 400px; flex-shrink: 0; border-left: 1px solid var(--seg-line);
-  background: var(--seg-bg); overflow: auto;
+  position: absolute; top: 0; right: 0; bottom: 0;
+  width: 400px; z-index: 50;
+  border-left: 1px solid var(--seg-line);
+  background: var(--seg-bg); overflow: hidden auto;
   display: flex; flex-direction: column;
   font-family: var(--seg-font-mono);
+  box-shadow: -16px 0 36px rgba(0,0,0,0.55);
 }
+body[data-theme="console"] .detail-body { overflow-wrap: anywhere; word-break: break-word; }
+body[data-theme="console"] .detail-meta .val { overflow-wrap: anywhere; min-width: 0; }
+body[data-theme="console"] .detail-meta select { max-width: 100%; }
 body[data-theme="console"] .detail-head {
   padding: 8px 14px; border-bottom: 1px solid var(--seg-line);
   display: flex; justify-content: space-between; align-items: center;
@@ -1090,6 +1142,9 @@ body[data-theme="console"] .graph {
   flex: 1; overflow: auto; background: var(--seg-bg);
   font-family: var(--seg-font-mono);
 }
+/* When the detail panel is open it overlays ~400px on the right; pad the
+   graph's scrollable area so the user can scroll right to peek under it. */
+body[data-theme="console"] .graph.has-detail { padding-right: 420px; }
 body[data-theme="console"] .graph-head {
   position: sticky; top: 0; z-index: 2; background: var(--seg-bg);
   display: flex; gap: 16px; padding: 9px 14px;
@@ -1101,19 +1156,41 @@ body[data-theme="console"] .graph-head .d-ready { color: var(--seg-green); }
 body[data-theme="console"] .graph-head .d-blk   { color: var(--seg-red); }
 body[data-theme="console"] .graph-head .d-act   { color: var(--seg-amber); }
 body[data-theme="console"] .graph-svg { display: block; }
-body[data-theme="console"] .graph-svg .edge { fill: none; }
+body[data-theme="console"] .graph-svg .g-bg { fill: transparent; pointer-events: all; cursor: default; }
+body[data-theme="console"] .graph-svg .edge { fill: none; pointer-events: none; transition: opacity 160ms ease; }
 body[data-theme="console"] .graph-svg .edge.open    { stroke: var(--seg-line2); stroke-width: 1; stroke-dasharray: 2 2; }
-body[data-theme="console"] .graph-svg .edge.blocked { stroke: var(--seg-red);  stroke-width: 1.2; }
+body[data-theme="console"] .graph-svg .edge.blocked { stroke: var(--seg-red);  stroke-width: 1.4; }
 body[data-theme="console"] .graph-svg .arrow.open    { fill: var(--seg-line2); }
 body[data-theme="console"] .graph-svg .arrow.blocked { fill: var(--seg-red); }
-body[data-theme="console"] .graph-svg .g-node { cursor: pointer; }
+body[data-theme="console"] .graph-svg .edge.off { opacity: 0.10; }
+body[data-theme="console"] .graph-svg .g-node { cursor: pointer; transition: opacity 160ms ease; }
+body[data-theme="console"] .graph-svg .g-node.off { opacity: 0.20; }
 body[data-theme="console"] .graph-svg .g-node .bg {
   fill: var(--seg-surface); stroke: var(--seg-line2); stroke-width: 1;
 }
-body[data-theme="console"] .graph-svg .g-node.sel .bg { fill: var(--seg-surface2); stroke: var(--seg-amber); }
+/* Blocker status emphasis: red bracket-style outline + tinted fill */
+body[data-theme="console"] .graph-svg .g-node.s-blocker .bg {
+  fill: rgba(224,106,74,0.07);
+  stroke: var(--seg-red);
+  stroke-width: 1.5;
+  stroke-dasharray: 6 2 2 2;
+}
+body[data-theme="console"] .graph-svg .g-node.s-blocker .bar {
+  stroke-width: 2;
+  animation: segConBlockBar 1.6s ease-in-out infinite;
+}
+@keyframes segConBlockBar { 0%,100% { opacity: 0.55; } 50% { opacity: 1; } }
+/* P1 emphasis: amber double-stroke outline */
+body[data-theme="console"] .graph-svg .g-node.p-1 .bg { stroke-width: 1.5; }
+/* "Currently blocking other work" emphasis: amber border + bold deps tag */
+body[data-theme="console"] .graph-svg .g-node.is-blocking .bg {
+  stroke: var(--seg-amber); stroke-width: 1.4; stroke-dasharray: none;
+}
+/* Selection outline overrides */
+body[data-theme="console"] .graph-svg .g-node.sel .bg { fill: var(--seg-surface2); stroke: var(--seg-amber); stroke-width: 1.8; stroke-dasharray: none; }
 body[data-theme="console"] .graph-svg .g-node.s-todo        .bar { stroke: var(--seg-todo);    stroke-width: 1.5; }
 body[data-theme="console"] .graph-svg .g-node.s-in_progress .bar { stroke: var(--seg-inprog);  stroke-width: 1.5; }
-body[data-theme="console"] .graph-svg .g-node.s-blocker     .bar { stroke: var(--seg-blocker); stroke-width: 1.5; }
+body[data-theme="console"] .graph-svg .g-node.s-blocker     .bar { stroke: var(--seg-blocker); stroke-width: 2; }
 body[data-theme="console"] .graph-svg .g-node.s-done        .bar { stroke: var(--seg-done);    stroke-width: 1.5; }
 body[data-theme="console"] .graph-svg .g-node.s-closed      .bar { stroke: var(--seg-closed);  stroke-width: 1.5; }
 body[data-theme="console"] .graph-svg .g-node .ring {
@@ -1122,6 +1199,16 @@ body[data-theme="console"] .graph-svg .g-node .ring {
 body[data-theme="console"] .graph-svg .g-meta {
   fill: var(--seg-muted);
   font: 9px/1 var(--seg-font-mono);
+}
+body[data-theme="console"] .graph-svg .g-meta .g-pri {
+  font-weight: 600;
+}
+body[data-theme="console"] .graph-svg .g-meta .g-pri.p-1 { fill: var(--seg-red); }
+body[data-theme="console"] .graph-svg .g-meta .g-pri.p-2 { fill: var(--seg-amber); }
+body[data-theme="console"] .graph-svg .g-meta .g-pri.p-3 { fill: var(--seg-muted); opacity: 0.7; }
+body[data-theme="console"] .graph-svg .g-meta .g-deps {
+  fill: var(--seg-amber);
+  font-weight: 600;
 }
 body[data-theme="console"] .graph-svg .g-title {
   font: 11px/1.3 var(--seg-font-body, var(--seg-font-mono));
@@ -1169,11 +1256,7 @@ body[data-theme="console"] .side-item:focus-visible {
     gap: 8px; padding: 4px 10px;
   }
   body[data-theme="console"] .blocker-chip { display: none; }
-  body[data-theme="console"] .detail {
-    position: absolute; right: 0; top: 0; bottom: 0;
-    width: min(420px, 100%); z-index: 50;
-    box-shadow: -12px 0 32px rgba(0,0,0,0.35);
-  }
+  body[data-theme="console"] .detail { width: min(420px, 100%); }
 }
 @media (max-width: 720px) {
   body[data-theme="console"] .sidebar { display: none; }
@@ -1387,7 +1470,7 @@ body[data-theme="dossier"] .mode-btn {
 body[data-theme="dossier"] .mode-btn:hover { color: var(--seg-text); }
 
 /* sidebar */
-body[data-theme="dossier"] .main { display: flex; flex: 1; min-height: 0; }
+body[data-theme="dossier"] .main { display: flex; flex: 1; min-height: 0; position: relative; }
 body[data-theme="dossier"] .sidebar {
   width: 240px; border-right: 2px solid var(--seg-rule);
   padding: 20px; flex-shrink: 0;
@@ -1659,13 +1742,18 @@ body[data-theme="dossier"] .empty {
   font-size: 16px; color: var(--seg-faint);
 }
 
-/* detail panel */
+/* detail panel — overlays content so opening/closing doesn't reflow the view */
 body[data-theme="dossier"] .detail {
-  width: 440px; flex-shrink: 0;
+  position: absolute; top: 0; right: 0; bottom: 0;
+  width: 440px; z-index: 50;
   border-left: 2px solid var(--seg-rule);
-  background: var(--seg-bg); overflow: auto;
+  background: var(--seg-bg); overflow: hidden auto;
   display: flex; flex-direction: column;
+  box-shadow: -16px 0 36px rgba(22,19,18,0.45);
 }
+body[data-theme="dossier"] .detail-body { overflow-wrap: anywhere; word-break: break-word; }
+body[data-theme="dossier"] .detail-meta .val { overflow-wrap: anywhere; min-width: 0; }
+body[data-theme="dossier"] .detail-meta select { max-width: 100%; }
 body[data-theme="dossier"] .detail-head {
   padding: 14px 24px;
   border-bottom: 0.5px solid var(--seg-rule2);
@@ -1857,6 +1945,9 @@ body[data-theme="dossier"] .view-stub .hint {
 body[data-theme="dossier"] .graph {
   flex: 1; overflow: auto; background: var(--seg-bg);
 }
+/* When the detail panel is open it overlays ~440px on the right; pad the
+   graph's scrollable area so the user can scroll right to peek under it. */
+body[data-theme="dossier"] .graph.has-detail { padding-right: 460px; }
 body[data-theme="dossier"] .graph-head {
   position: sticky; top: 0; z-index: 2; background: var(--seg-bg);
   padding: 16px 24px 10px;
@@ -1872,20 +1963,38 @@ body[data-theme="dossier"] .graph-head .head-sub {
   letter-spacing: 1.2px; text-transform: uppercase; margin-top: 4px;
 }
 body[data-theme="dossier"] .graph-svg { display: block; }
-body[data-theme="dossier"] .graph-svg .edge { fill: none; }
+body[data-theme="dossier"] .graph-svg .g-bg { fill: transparent; pointer-events: all; cursor: default; }
+body[data-theme="dossier"] .graph-svg .edge { fill: none; pointer-events: none; transition: opacity 160ms ease; }
 body[data-theme="dossier"] .graph-svg .edge.open    { stroke: var(--seg-rule2); stroke-width: 0.75; stroke-dasharray: 3 4; }
-body[data-theme="dossier"] .graph-svg .edge.blocked { stroke: var(--seg-accent); stroke-width: 1.5; }
-body[data-theme="dossier"] .graph-svg .arrow { fill: var(--seg-rule2); }
-body[data-theme="dossier"] .graph-svg .g-node { cursor: pointer; }
+body[data-theme="dossier"] .graph-svg .edge.blocked { stroke: var(--seg-blocker); stroke-width: 1.5; }
+body[data-theme="dossier"] .graph-svg .arrow.open    { fill: var(--seg-rule2); }
+body[data-theme="dossier"] .graph-svg .arrow.blocked { fill: var(--seg-blocker); }
+body[data-theme="dossier"] .graph-svg .edge.off { opacity: 0.10; }
+body[data-theme="dossier"] .graph-svg .g-node { cursor: pointer; transition: opacity 160ms ease; }
+body[data-theme="dossier"] .graph-svg .g-node.off { opacity: 0.20; }
 body[data-theme="dossier"] .graph-svg .g-node .bg {
   fill: var(--seg-bg); stroke: var(--seg-rule2); stroke-width: 0.5;
 }
+/* Blocker status emphasis: classified-style red double border + tinted fill */
+body[data-theme="dossier"] .graph-svg .g-node.s-blocker .bg {
+  fill: rgba(168,41,31,0.05);
+  stroke: var(--seg-blocker);
+  stroke-width: 1.25;
+  stroke-dasharray: 5 2;
+}
+/* P1 emphasis */
+body[data-theme="dossier"] .graph-svg .g-node.p-1 .bg { stroke-width: 1; }
+/* "Currently blocking other work" emphasis: solid accent border + bold deps tag */
+body[data-theme="dossier"] .graph-svg .g-node.is-blocking .bg {
+  stroke: var(--seg-text); stroke-width: 1.25; stroke-dasharray: none;
+}
+/* Selection outline overrides */
 body[data-theme="dossier"] .graph-svg .g-node.sel .bg {
-  fill: var(--seg-surface); stroke: var(--seg-text); stroke-width: 1.5;
+  fill: var(--seg-surface); stroke: var(--seg-text); stroke-width: 1.75; stroke-dasharray: none;
 }
 body[data-theme="dossier"] .graph-svg .g-node.s-todo        .bar { stroke: var(--seg-todo);    stroke-width: 1; }
 body[data-theme="dossier"] .graph-svg .g-node.s-in_progress .bar { stroke: var(--seg-inprog);  stroke-width: 1; }
-body[data-theme="dossier"] .graph-svg .g-node.s-blocker     .bar { stroke: var(--seg-blocker); stroke-width: 1; }
+body[data-theme="dossier"] .graph-svg .g-node.s-blocker     .bar { stroke: var(--seg-blocker); stroke-width: 1.5; }
 body[data-theme="dossier"] .graph-svg .g-node.s-done        .bar { stroke: var(--seg-done);    stroke-width: 1; }
 body[data-theme="dossier"] .graph-svg .g-node.s-closed      .bar { stroke: var(--seg-closed);  stroke-width: 1; }
 body[data-theme="dossier"] .graph-svg .g-node .ring {
@@ -1895,6 +2004,20 @@ body[data-theme="dossier"] .graph-svg .g-meta {
   fill: var(--seg-muted);
   font: 8.5px/1 var(--seg-font);
   letter-spacing: 1px;
+}
+body[data-theme="dossier"] .graph-svg .g-meta .g-pri {
+  font-family: var(--seg-font-serif);
+  font-style: italic;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+body[data-theme="dossier"] .graph-svg .g-meta .g-pri.p-1 { fill: var(--seg-blocker); font-size: 10px; }
+body[data-theme="dossier"] .graph-svg .g-meta .g-pri.p-2 { fill: var(--seg-text); }
+body[data-theme="dossier"] .graph-svg .g-meta .g-pri.p-3 { fill: var(--seg-muted); opacity: 0.7; }
+body[data-theme="dossier"] .graph-svg .g-meta .g-deps {
+  fill: var(--seg-text);
+  font-weight: 700;
+  letter-spacing: 1.2px;
 }
 body[data-theme="dossier"] .graph-svg .g-title {
   font: italic 13px/1.25 var(--seg-font-serif);
@@ -1946,11 +2069,7 @@ body[data-theme="dossier"] .side-item:focus-visible {
     gap: 10px; padding: 10px 16px;
   }
   body[data-theme="dossier"] .blocker-chip { display: none; }
-  body[data-theme="dossier"] .detail {
-    position: absolute; right: 0; top: 0; bottom: 0;
-    width: min(440px, 100%); z-index: 50;
-    box-shadow: -12px 0 32px rgba(22,19,18,0.25);
-  }
+  body[data-theme="dossier"] .detail { width: min(440px, 100%); }
 }
 @media (max-width: 720px) {
   body[data-theme="dossier"] .sidebar { display: none; }
@@ -2507,8 +2626,61 @@ const Graph = {
     const w = window.innerWidth;
     let avail = w;
     if (w > 720) avail -= (w > 1100 ? 230 : 180);
-    if (Store && Store.selectedId && w > 900) avail -= (w > 1100 ? 400 : 340);
+    // Detail panel now overlays the content (position: absolute), so we no
+    // longer subtract its width. The graph keeps the same layout when a task
+    // is selected, eliminating the jarring reflow.
     return Math.max(360, avail - 20);
+  },
+  // blockingMap: returns Map<id, count> where count is the number of in-scope
+  // tasks that are still waiting on `id`. A parent is "currently blocking"
+  // only when both: (a) the parent itself isn't done/closed (a finished parent
+  // no longer holds anyone up) and (b) at least one in-scope dependent is
+  // still pending. Done/closed dependents don't count toward the total.
+  blockingMap(tasks) {
+    const m = new Map();
+    const byId = {};
+    tasks.forEach(t => { byId[t.id] = t; });
+    tasks.forEach(t => {
+      if (!t.blocked_by) return;
+      const parent = byId[t.blocked_by];
+      if (!parent) return;
+      if (parent.status === 'done' || parent.status === 'closed') return;
+      if (t.status === 'done' || t.status === 'closed') return;
+      m.set(parent.id, (m.get(parent.id) || 0) + 1);
+    });
+    return m;
+  },
+  // focusSet: returns a Set of task ids in the same connected component
+  // as `sel` (upstream blockers via blocked_by chain + downstream dependents,
+  // transitively). Returns null when there is no selection or it's out of scope.
+  // Each task has at most one blocked_by, so upstream is a single chain;
+  // downstream can branch.
+  focusSet(sel, tasks, byId) {
+    if (!sel || !byId[sel]) return null;
+    const inScope = new Set(tasks.map(t => t.id));
+    if (!inScope.has(sel)) return null;
+    const childrenOf = {};
+    tasks.forEach(t => {
+      const blk = t.blocked_by;
+      if (blk && inScope.has(blk)) {
+        (childrenOf[blk] = childrenOf[blk] || []).push(t.id);
+      }
+    });
+    const focus = new Set();
+    let cur = sel;
+    while (cur && inScope.has(cur) && !focus.has(cur)) {
+      focus.add(cur);
+      const t = byId[cur];
+      cur = t && t.blocked_by;
+    }
+    const stack = [sel];
+    while (stack.length) {
+      const id = stack.pop();
+      (childrenOf[id] || []).forEach(c => {
+        if (!focus.has(c)) { focus.add(c); stack.push(c); }
+      });
+    }
+    return focus;
   },
 };
 
@@ -2675,33 +2847,46 @@ function obsGraphView(T, tasks, byId) {
   const ready = new Set(Util.ready(Store.tasks).map(t => t.id));
   const readyInView = tasks.reduce((n, t) => n + (ready.has(t.id) ? 1 : 0), 0);
   const sel = Store.selectedId;
+  const focus = Graph.focusSet(sel, tasks, byId);
+  const blockingMap = Graph.blockingMap(tasks);
   const edges = Graph.edges(tasks, byId).map(e => {
     const from = layout.pos[e.parent.id], to = layout.pos[e.child.id];
     if (!from || !to) return '';
     const x1 = from.x + layout.W / 2, y1 = from.y + layout.H;
     const x2 = to.x + layout.W / 2, y2 = to.y;
     const mid = (y1 + y2) / 2;
-    return '<path class="edge" d="M ' + x1 + ' ' + y1 + ' C ' + x1 + ' ' + mid + ' ' + x2 + ' ' + mid + ' ' + x2 + ' ' + y2 + '" marker-end="url(#obs-arrow)"></path>';
+    const inFocus = !focus || (focus.has(e.parent.id) && focus.has(e.child.id));
+    const cls = 'edge ' + (e.blocked ? 'blocked' : 'open') + (inFocus ? '' : ' off');
+    const marker = e.blocked ? 'obs-arrow-blocked' : 'obs-arrow';
+    return '<path class="' + cls + '" d="M ' + x1 + ' ' + y1 + ' C ' + x1 + ' ' + mid + ' ' + x2 + ' ' + mid + ' ' + x2 + ' ' + y2 + '" marker-end="url(#' + marker + ')"></path>';
   }).join('');
   const nodes = tasks.map(t => {
     const p = layout.pos[t.id]; if (!p) return '';
     const isReady = ready.has(t.id);
     const isSel = sel === t.id;
-    const cls = ['g-node', 's-' + t.status];
+    const blocks = blockingMap.get(t.id) || 0;
+    const cls = ['g-node', 's-' + t.status, 'p-' + t.priority];
     if (isSel) cls.push('sel');
     if (isReady) cls.push('ready');
+    if (blocks > 0) cls.push('is-blocking');
+    if (focus && !focus.has(t.id)) cls.push('off');
+    const priChip = t.priority === 0 ? '' :
+      '<text class="g-pri p-' + t.priority + '" x="' + (layout.W - 8) + '" y="14" text-anchor="end">P' + t.priority + '</text>';
+    const depsTag = blocks > 0 ? '<tspan class="g-deps">  \u2937' + blocks + '</tspan>' : '';
     return '<g class="' + cls.join(' ') + '" data-act="select" data-id="' + Util.esc(t.id) + '" transform="translate(' + p.x + ',' + p.y + ')">' +
       (isReady ? '<rect class="ring" x="-3" y="-3" width="' + (layout.W + 6) + '" height="' + (layout.H + 6) + '" rx="8"></rect>' : '') +
       '<rect class="bg" width="' + layout.W + '" height="' + layout.H + '" rx="6"></rect>' +
       '<rect class="bar" width="3" height="' + layout.H + '" rx="1.5"></rect>' +
-      '<text class="g-meta" x="14" y="20">' + Util.esc(Util.shortId(t.id, 8)) + ' \u00B7 P' + t.priority + '</text>' +
-      '<foreignObject x="14" y="24" width="' + (layout.W - 24) + '" height="' + (layout.H - 28) + '">' +
+      (blocks > 0 ? '<rect class="bar2" x="3" width="2" height="' + layout.H + '"></rect>' : '') +
+      '<text class="g-meta" x="14" y="20">' + Util.esc(Util.shortId(t.id, 8)) + depsTag + '</text>' +
+      priChip +
+      '<foreignObject x="14" y="24" width="' + (layout.W - 36) + '" height="' + (layout.H - 28) + '">' +
         '<div xmlns="http://www.w3.org/1999/xhtml" class="g-title">' + Util.esc(t.title) + '</div>' +
       '</foreignObject>' +
     '</g>';
   }).join('');
   const inTree = Store.filter === 'ready';
-  return '<div class="graph">' +
+  return '<div class="graph' + (sel ? ' has-detail' : '') + '" data-act="deselect">' +
     '<div class="graph-head">' +
       '<span>Dependency DAG \u00B7 top-down</span>' +
       '<span class="dot">\u00B7</span>' +
@@ -2710,7 +2895,11 @@ function obsGraphView(T, tasks, byId) {
       '<span>' + readyInView + ' ready / ' + tasks.length + (inTree ? ' in flight' : ' total') + '</span>' +
     '</div>' +
     '<svg class="graph-svg" width="' + layout.width + '" height="' + layout.height + '">' +
-      '<defs><marker id="obs-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="arrow"></path></marker></defs>' +
+      '<defs>' +
+        '<marker id="obs-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="arrow open"></path></marker>' +
+        '<marker id="obs-arrow-blocked" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="arrow blocked"></path></marker>' +
+      '</defs>' +
+      '<rect class="g-bg" data-act="deselect" width="' + layout.width + '" height="' + layout.height + '"></rect>' +
       edges +
       nodes +
     '</svg>' +
@@ -3049,14 +3238,16 @@ function conGraphView(T, tasks, byId) {
   const ready = new Set(Util.ready(Store.tasks).map(t => t.id));
   const readyInView = tasks.reduce((n, t) => n + (ready.has(t.id) ? 1 : 0), 0);
   const sel = Store.selectedId;
-  const meta = T.statusMeta;
+  const focus = Graph.focusSet(sel, tasks, byId);
+  const blockingMap = Graph.blockingMap(tasks);
   const edges = Graph.edges(tasks, byId).map(e => {
     const from = layout.pos[e.parent.id], to = layout.pos[e.child.id];
     if (!from || !to) return '';
     const x1 = from.x + layout.W / 2, y1 = from.y + layout.H;
     const x2 = to.x + layout.W / 2, y2 = to.y;
     const mid = (y1 + y2) / 2;
-    const cls = 'edge ' + (e.blocked ? 'blocked' : 'open');
+    const inFocus = !focus || (focus.has(e.parent.id) && focus.has(e.child.id));
+    const cls = 'edge ' + (e.blocked ? 'blocked' : 'open') + (inFocus ? '' : ' off');
     const marker = e.blocked ? 'con-arrow-r' : 'con-arrow';
     return '<path class="' + cls + '" d="M ' + x1 + ' ' + y1 + ' L ' + x1 + ' ' + mid + ' L ' + x2 + ' ' + mid + ' L ' + x2 + ' ' + y2 + '" marker-end="url(#' + marker + ')"></path>';
   }).join('');
@@ -3064,14 +3255,19 @@ function conGraphView(T, tasks, byId) {
     const p = layout.pos[t.id]; if (!p) return '';
     const isReady = ready.has(t.id);
     const isSel = sel === t.id;
-    const cls = ['g-node', 's-' + t.status];
+    const blocks = blockingMap.get(t.id) || 0;
+    const cls = ['g-node', 's-' + t.status, 'p-' + t.priority];
     if (isSel) cls.push('sel');
     if (isReady) cls.push('ready');
-    const sm = meta[t.status] || { glyph: '[?]' };
+    if (blocks > 0) cls.push('is-blocking');
+    if (focus && !focus.has(t.id)) cls.push('off');
+    const priTag = t.priority === 0 ? '' :
+      ' \u00B7 <tspan class="g-pri p-' + t.priority + '">[P' + t.priority + ']</tspan>';
+    const depsTag = blocks > 0 ? ' \u00B7 <tspan class="g-deps">[BLK&gt;' + blocks + ']</tspan>' : '';
     return '<g class="' + cls.join(' ') + '" data-act="select" data-id="' + Util.esc(t.id) + '" transform="translate(' + p.x + ',' + p.y + ')">' +
       (isReady ? '<rect class="ring" x="-2" y="-2" width="' + (layout.W + 4) + '" height="' + (layout.H + 4) + '"></rect>' : '') +
       '<rect class="bg" width="' + layout.W + '" height="' + layout.H + '"></rect>' +
-      '<text class="g-meta" x="10" y="14">' + Util.esc(Util.shortId(t.id, 8)) + ' \u00B7 P' + t.priority + ' \u00B7 ' + Util.esc(sm.glyph) + '</text>' +
+      '<text class="g-meta" x="10" y="14">' + Util.esc(Util.shortId(t.id, 8)) + priTag + depsTag + '</text>' +
       '<line class="bar" x1="0" y1="22" x2="' + layout.W + '" y2="22"></line>' +
       '<foreignObject x="10" y="26" width="' + (layout.W - 20) + '" height="' + (layout.H - 30) + '">' +
         '<div xmlns="http://www.w3.org/1999/xhtml" class="g-title">' + Util.esc(t.title) + '</div>' +
@@ -3079,7 +3275,7 @@ function conGraphView(T, tasks, byId) {
     '</g>';
   }).join('');
   const inTree = Store.filter === 'ready';
-  return '<div class="graph">' +
+  return '<div class="graph' + (sel ? ' has-detail' : '') + '" data-act="deselect">' +
     '<div class="graph-head">' +
       '<span class="head-tag">' + (inTree ? 'TREE' : 'DAG') + '[' + tasks.length + ']</span>' +
       '<span>topological \u00B7 top\u2192down \u00B7 ' + readyInView + ' ready</span>' +
@@ -3090,6 +3286,7 @@ function conGraphView(T, tasks, byId) {
         '<marker id="con-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="arrow open"></path></marker>' +
         '<marker id="con-arrow-r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="arrow blocked"></path></marker>' +
       '</defs>' +
+      '<rect class="g-bg" data-act="deselect" width="' + layout.width + '" height="' + layout.height + '"></rect>' +
       edges +
       nodes +
     '</svg>' +
@@ -3421,6 +3618,8 @@ function dosGraphView(T, tasks, byId) {
   const ready = new Set(Util.ready(Store.tasks).map(t => t.id));
   const readyInView = tasks.reduce((n, t) => n + (ready.has(t.id) ? 1 : 0), 0);
   const sel = Store.selectedId;
+  const focus = Graph.focusSet(sel, tasks, byId);
+  const blockingMap = Graph.blockingMap(tasks);
   const meta = T.statusMeta;
   const edges = Graph.edges(tasks, byId).map(e => {
     const from = layout.pos[e.parent.id], to = layout.pos[e.child.id];
@@ -3428,21 +3627,29 @@ function dosGraphView(T, tasks, byId) {
     const x1 = from.x + layout.W / 2, y1 = from.y + layout.H;
     const x2 = to.x + layout.W / 2, y2 = to.y;
     const mid = (y1 + y2) / 2;
-    const cls = 'edge ' + (e.blocked ? 'blocked' : 'open');
-    return '<path class="' + cls + '" d="M ' + x1 + ' ' + y1 + ' C ' + x1 + ' ' + mid + ' ' + x2 + ' ' + mid + ' ' + x2 + ' ' + y2 + '" marker-end="url(#dos-arrow)"></path>';
+    const inFocus = !focus || (focus.has(e.parent.id) && focus.has(e.child.id));
+    const cls = 'edge ' + (e.blocked ? 'blocked' : 'open') + (inFocus ? '' : ' off');
+    const marker = e.blocked ? 'dos-arrow-blocked' : 'dos-arrow';
+    return '<path class="' + cls + '" d="M ' + x1 + ' ' + y1 + ' C ' + x1 + ' ' + mid + ' ' + x2 + ' ' + mid + ' ' + x2 + ' ' + y2 + '" marker-end="url(#' + marker + ')"></path>';
   }).join('');
   const nodes = tasks.map(t => {
     const p = layout.pos[t.id]; if (!p) return '';
     const isReady = ready.has(t.id);
     const isSel = sel === t.id;
-    const cls = ['g-node', 's-' + t.status];
+    const blocks = blockingMap.get(t.id) || 0;
+    const cls = ['g-node', 's-' + t.status, 'p-' + t.priority];
     if (isSel) cls.push('sel');
     if (isReady) cls.push('ready');
+    if (blocks > 0) cls.push('is-blocking');
+    if (focus && !focus.has(t.id)) cls.push('off');
     const sm = meta[t.status] || { label: '?' };
+    const priRoman = t.priority === 0 ? '' :
+      ' \u00B7 <tspan class="g-pri p-' + t.priority + '">' + DOS_ROMAN[t.priority] + '</tspan>';
+    const depsTag = blocks > 0 ? ' \u00B7 <tspan class="g-deps">BLOCKS ' + blocks + '</tspan>' : '';
     return '<g class="' + cls.join(' ') + '" data-act="select" data-id="' + Util.esc(t.id) + '" transform="translate(' + p.x + ',' + p.y + ')">' +
       (isReady ? '<rect class="ring" x="-4" y="-4" width="' + (layout.W + 8) + '" height="' + (layout.H + 8) + '"></rect>' : '') +
       '<rect class="bg" width="' + layout.W + '" height="' + layout.H + '"></rect>' +
-      '<text class="g-meta" x="12" y="14">' + Util.esc(Util.shortId(t.id, 8)) + ' \u00B7 P' + t.priority + ' \u00B7 ' + Util.esc(sm.label.toUpperCase()) + '</text>' +
+      '<text class="g-meta" x="12" y="14">' + Util.esc(Util.shortId(t.id, 8)) + priRoman + ' \u00B7 ' + Util.esc(sm.label.toUpperCase()) + depsTag + '</text>' +
       '<line class="bar" x1="12" y1="20" x2="' + (layout.W - 12) + '" y2="20"></line>' +
       '<foreignObject x="12" y="24" width="' + (layout.W - 24) + '" height="' + (layout.H - 30) + '">' +
         '<div xmlns="http://www.w3.org/1999/xhtml" class="g-title">' + Util.esc(t.title) + '</div>' +
@@ -3450,13 +3657,17 @@ function dosGraphView(T, tasks, byId) {
     '</g>';
   }).join('');
   const inTree = Store.filter === 'ready';
-  return '<div class="graph">' +
+  return '<div class="graph' + (sel ? ' has-detail' : '') + '" data-act="deselect">' +
     '<div class="graph-head">' +
       '<div class="head-title">Lineage</div>' +
       '<div class="head-sub">dependency graph \u00B7 ' + readyInView + ' ready of ' + tasks.length + (inTree ? ' in flight' : ' total') + '</div>' +
     '</div>' +
     '<svg class="graph-svg" width="' + layout.width + '" height="' + layout.height + '">' +
-      '<defs><marker id="dos-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="arrow"></path></marker></defs>' +
+      '<defs>' +
+        '<marker id="dos-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="arrow open"></path></marker>' +
+        '<marker id="dos-arrow-blocked" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="arrow blocked"></path></marker>' +
+      '</defs>' +
+      '<rect class="g-bg" data-act="deselect" width="' + layout.width + '" height="' + layout.height + '"></rect>' +
       edges +
       nodes +
     '</svg>' +
