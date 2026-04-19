@@ -1967,6 +1967,30 @@ func resolveProjectIDForMCP(s *store.Store, hint string) (string, error) {
 	return "", fmt.Errorf("cannot auto-resolve project: %d exist [%s]. Pass project_id explicitly or set $SEGMENTS_PROJECT_ID", len(projects), strings.Join(names, ", "))
 }
 
+// coerceInt parses an integer argument received over MCP. The schema advertises
+// "number", but real clients (especially when the field sits at the top level
+// of a tool call) sometimes serialise it as a string. Accept float64, int,
+// json.Number, and decimal strings; fall back to def on anything else.
+func coerceInt(v interface{}, def int) int {
+	switch x := v.(type) {
+	case float64:
+		return int(x)
+	case int:
+		return x
+	case int64:
+		return int(x)
+	case json.Number:
+		if n, err := x.Int64(); err == nil {
+			return int(n)
+		}
+	case string:
+		if n, err := strconv.Atoi(strings.TrimSpace(x)); err == nil {
+			return n
+		}
+	}
+	return def
+}
+
 func callTool(s *store.Store, tool string, args map[string]interface{}) string {
 	str := func(key string) string { v, _ := args[key].(string); return v }
 	marshal := func(v interface{}) string { d, _ := json.Marshal(v); return string(d) }
@@ -1976,10 +2000,7 @@ func callTool(s *store.Store, tool string, args map[string]interface{}) string {
 		if !ok {
 			return def
 		}
-		if f, ok := v.(float64); ok {
-			return int(f)
-		}
-		return def
+		return coerceInt(v, def)
 	}
 
 	switch tool {
@@ -2068,9 +2089,7 @@ func callTool(s *store.Store, tool string, args map[string]interface{}) string {
 			body, _ := obj["body"].(string)
 			priority := 0
 			if p, ok := obj["priority"]; ok {
-				if pf, ok := p.(float64); ok {
-					priority = int(pf)
-				}
+				priority = coerceInt(p, 0)
 			}
 			blockedBy, _ := obj["blocked_by"].(string)
 			if strings.HasPrefix(blockedBy, "#") {
