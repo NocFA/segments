@@ -5,5 +5,6 @@ opencode.json
 .mcp.json
 /segments
 /segments.exe
+/bin/
 scripts/dev-install.sh
 scripts/dev-install.ps1
