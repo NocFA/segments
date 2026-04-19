@@ -1670,37 +1670,37 @@ func fileExists(path string) bool {
 const segmentsShortcutInstructions = `Segments is the persistent task tracker for this project. Tasks survive context wipes and outlive sessions; TodoWrite does not. Use Segments to plan multi-step work, scaffold upcoming tasks, track what is in progress, and capture follow-ups so they are not lost.
 
 When to use it (proactively, without being asked):
-  Planning           Break a feature or refactor into steps BEFORE coding. Use segments_create_tasks to stub the whole queue in one call.
+  Planning           Break a feature or refactor into steps BEFORE coding. Use segments_create_tasks to stub the whole queue in ONE call with priority + blocked_by on every entry.
   Scaffolding        Stub upcoming work as todo tasks so the queue is visible.
-  Starting work      segments_update_task status=in_progress on the task you pick up. Keep at most one in_progress at a time.
+  Starting work      Pick from the Ready queue (unblocked todos, listed below). segments_update_task status=in_progress on the one you pick. Keep at most one in_progress at a time.
   Finishing          segments_update_task status=done when the work lands.
-  New scope          Capture every "we should also..." as a new todo task immediately so it survives a context wipe.
+  New scope          Capture every "we should also..." as a new todo immediately so it survives a context wipe. If the follow-up was discovered while working on task X and cannot start until X lands, set blocked_by=<X's id> (the "discovered-from" pattern).
   "segment it" / "sg it" / "seg it" / "segment this" / "sg this" / "seg this"
                      Capture the current topic as a task right now, no clarifying questions.
 
 Task body is the contract. Every body must be self-contained: what to do, relevant file paths, constraints, expected outcome. A fresh session with no history must be able to pick it up from the body alone.
 
-Priority (integer 0-3; use numbers, NOT the words "high"/"medium"/"low"):
-  1  URGENT. Do NOW. User flagged this as urgent, or it is actively blocking other work.
-  2  NORMAL. Regular dev work the user wants done this session.
-  3  BACKLOG. Future / idea / nice-to-have / "let's discuss later". Not this session.
-  0  unset. Only for legacy tasks created before triage; never pick 0 when CREATING a task.
-When you create a task, you MUST choose 1, 2, or 3 based on intent. Do not default to 0. If the user said "let's do X now" it is 2; if they said "sometime we should X" it is 3; if they said "drop everything and fix X" it is 1.
+Priority is an integer 1, 2, or 3 -- pick one every time you CREATE a task. Use numbers, NOT the words "high"/"medium"/"low". Match the user's signal:
+  1  URGENT. "drop everything and fix X", "this is blocking prod", "broken build", "critical bug". Also: any task that is actively blocking other ready work.
+  2  NORMAL. "let's do X", "add Y", "refactor Z", "ship the feature" -- regular session work. Default to 2 when the intent is clearly "do this now or next" but not urgent.
+  3  BACKLOG. "sometime we should", "maybe later", "one idea is", "let's discuss". Not this session.
+  0 is "unset" and exists only for legacy tasks created before triage. Never pick 0 when creating. If you are genuinely unsure between tiers, default to 2, not 0.
 
-Blockers (blocked_by):
-  Set blocked_by=<task_id> whenever task A literally cannot start until task B lands. This is NOT optional ornamentation -- it tells the agent what order to work in and what is currently "ready". Never create cycles.
-  Common cases that ALWAYS need a blocker edge:
-    - Greenfield scaffold: the bootstrap/init task (e.g. "Initialize project") blocks every downstream task. Link every other task in the batch to it.
+blocked_by is a correctness signal, not a hint. Set blocked_by=<task_id> whenever task A literally cannot start until task B lands. Omitting it when there is a real hard dependency misleads the next agent about which task is actually actionable in the Ready queue.
+  You MUST set blocked_by in these cases:
+    - Greenfield scaffold: the bootstrap/init task (e.g. "Initialize project") blocks every downstream task. In a segments_create_tasks batch, put init as #0 and give every other task blocked_by="#0".
     - Infra before feature: "Install Stripe SDK" blocks "Build Merch page".
     - Schema before use: "Add DB migration" blocks "Wire up form submission".
-  In segments_create_tasks, use "#0".."#N" to reference earlier entries in the same batch; the server resolves these to real UUIDs. Prefer this over creating tasks in two separate calls just to get the UUIDs.
+    - Discovered-from: task discovered mid-work on X and cannot start until X is done -> blocked_by=<X's id>.
+  Leave blocked_by empty only for genuinely independent tasks. "Do this after that" for flow reasons is handled by priority + list order, not blocked_by. Never create cycles.
+  In segments_create_tasks, "#0".."#N" references earlier entries in the same batch; the server resolves these to real UUIDs. Prefer this over creating tasks in two calls just to get UUIDs. Creating a scaffolded batch without linking the obvious dependency chain is a correctness mistake, not a style choice.
 
 MCP tools (server name: "segments"). Your client may expose them under these exact names or with an "mcp__segments__" prefix (Claude Code does). Trust your client's own tool list; do not invent names. project_id is OPTIONAL on all task tools: it auto-resolves from CWD basename, single-project fallback, or $SEGMENTS_PROJECT_ID. If your client advertises no segments_* tools at all, the MCP server is not connected -- fall back to the CLI below; do not guess tool names.
   segments_list_projects()
   segments_list_tasks(project_id?, status?)
   segments_get_task(task_id, project_id?)
-  segments_create_task(title, body?, priority?, blocked_by?, project_id?)
-  segments_create_tasks(tasks: [{title, body?, priority?, blocked_by?}, ...], project_id?)
+  segments_create_task(title, body?, priority=1|2|3, blocked_by?, project_id?)
+  segments_create_tasks(tasks: [{title, body?, priority=1|2|3, blocked_by?}, ...], project_id?)
       Preferred for planning: scaffold the whole queue in one call. Use "#0".."#N" in blocked_by to reference earlier tasks in the same batch (resolved to their new UUIDs).
   segments_update_task(task_id, title?, body?, status?, priority?, blocked_by?, project_id?)
       status: todo | in_progress | done | closed | blocker
@@ -1714,7 +1714,7 @@ CLI fallback (only if MCP tools are unavailable). -p is optional: sg auto-resolv
   sg done <task_id>                         Mark task done (auto-resolves project)
   sg close <task_id>                        Close a task (auto-resolves project)
 
-IDs below are full UUIDs, ready to paste into tool calls.`
+Ready queue = todos whose blocker is empty or done. Pick from there first. IDs below are full UUIDs, ready to paste into tool calls.`
 
 func runContext(s *store.Store) error {
 	projects, err := s.ListProjects()
@@ -1725,38 +1725,25 @@ func runContext(s *store.Store) error {
 	lines := []string{segmentsShortcutInstructions, ""}
 	for _, p := range projects {
 		tasks, _ := s.ListTasks(p.ID)
-		var todo, inProgress, done, blocker int
-		var open []string
-		for _, t := range tasks {
-			switch t.Status {
-			case models.StatusTodo:
-				todo++
-				entry := fmt.Sprintf("  [todo] %s  task_id=%s", t.Title, t.ID)
-				if t.Priority > 0 {
-					entry += fmt.Sprintf(" P%d", t.Priority)
-				}
-				if t.BlockedBy != "" {
-					entry += " blocked_by=" + t.BlockedBy
-				}
-				open = append(open, entry)
-			case models.StatusInProgress:
-				inProgress++
-				entry := fmt.Sprintf("  [in_progress] %s  task_id=%s", t.Title, t.ID)
-				if t.Priority > 0 {
-					entry += fmt.Sprintf(" P%d", t.Priority)
-				}
-				open = append(open, entry)
-			case models.StatusDone:
-				done++
-			case models.StatusBlocker:
-				blocker++
-				entry := fmt.Sprintf("  [blocker] %s  task_id=%s", t.Title, t.ID)
-				open = append(open, entry)
-			}
+		g := groupTasksForContext(tasks)
+		lines = append(lines, fmt.Sprintf("Project: %s  project_id=%s  (%d tasks: %d todo [%d ready], %d in progress, %d done, %d blockers)",
+			p.Name, p.ID, len(tasks), g.todoCount, len(g.ready), g.inProgressCount, g.doneCount, g.blockerCount))
+		if len(g.inProgress) > 0 {
+			lines = append(lines, "  In progress:")
+			lines = append(lines, g.inProgress...)
 		}
-		lines = append(lines, fmt.Sprintf("Project: %s  project_id=%s  (%d tasks: %d todo, %d in progress, %d done, %d blockers)",
-			p.Name, p.ID, len(tasks), todo, inProgress, done, blocker))
-		lines = append(lines, open...)
+		if len(g.ready) > 0 {
+			lines = append(lines, "  Ready queue (unblocked -- pick from here):")
+			lines = append(lines, g.ready...)
+		}
+		if len(g.blocked) > 0 {
+			lines = append(lines, "  Blocked (waiting on a dependency):")
+			lines = append(lines, g.blocked...)
+		}
+		if len(g.blockers) > 0 {
+			lines = append(lines, "  Blockers (status=blocker, investigate):")
+			lines = append(lines, g.blockers...)
+		}
 	}
 
 	context := strings.Join(lines, "\n")
@@ -1764,6 +1751,57 @@ func runContext(s *store.Store) error {
 
 	fmt.Printf(`{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":%s}}`, escaped)
 	return nil
+}
+
+type contextTaskGroups struct {
+	inProgress                                            []string
+	ready                                                 []string
+	blocked                                               []string
+	blockers                                              []string
+	todoCount, inProgressCount, doneCount, blockerCount int
+}
+
+func groupTasksForContext(tasks []models.Task) contextTaskGroups {
+	byID := make(map[string]models.Task, len(tasks))
+	for _, t := range tasks {
+		byID[t.ID] = t
+	}
+	format := func(t models.Task) string {
+		entry := fmt.Sprintf("    [%s] %s  task_id=%s", t.Status, t.Title, t.ID)
+		if t.Priority > 0 {
+			entry += fmt.Sprintf(" P%d", t.Priority)
+		}
+		if t.BlockedBy != "" {
+			entry += " blocked_by=" + t.BlockedBy
+		}
+		return entry
+	}
+	var g contextTaskGroups
+	for _, t := range tasks {
+		switch t.Status {
+		case models.StatusTodo:
+			g.todoCount++
+			if t.BlockedBy == "" {
+				g.ready = append(g.ready, format(t))
+				continue
+			}
+			blocker, ok := byID[t.BlockedBy]
+			if ok && blocker.Status == models.StatusDone {
+				g.ready = append(g.ready, format(t))
+			} else {
+				g.blocked = append(g.blocked, format(t))
+			}
+		case models.StatusInProgress:
+			g.inProgressCount++
+			g.inProgress = append(g.inProgress, format(t))
+		case models.StatusDone:
+			g.doneCount++
+		case models.StatusBlocker:
+			g.blockerCount++
+			g.blockers = append(g.blockers, format(t))
+		}
+	}
+	return g
 }
 
 func mcpServer(s *store.Store) error {
@@ -1811,9 +1849,9 @@ func negotiateProtocolVersion(req map[string]interface{}) string {
 
 const mcpServerInstructions = `Segments tracks multi-session work as a dependency graph. Use segments_create_tasks to scaffold whole queues in ONE round-trip (the tasks argument MUST be a real JSON array, not a stringified one). Use segments_update_task status=in_progress when starting work and status=done when it lands. Capture every "we should also..." as a new task so it survives context wipes. project_id is optional: auto-resolves from CWD basename, single-project fallback, or $SEGMENTS_PROJECT_ID.
 
-Priority (integer, required when creating): 1=urgent/NOW, 2=normal session work, 3=backlog/future/idea, 0=unset (legacy only; do NOT pick 0 when creating). Always pick 1/2/3 based on user intent.
+Priority is an integer 1/2/3 and is required when creating -- pick one based on user intent, never omit it. 1=URGENT ("drop everything", "broken build", "blocking prod", or actively blocking other ready work). 2=NORMAL ("let's do X" / regular session work; default when the intent is clearly now-or-next but not urgent). 3=BACKLOG ("sometime", "maybe later", "one idea is", future idea). 0 is unset (legacy only); do NOT pick 0 when creating.
 
-blocked_by: set whenever task A literally cannot start until task B lands. In segments_create_tasks, use "#0".."#N" to reference earlier entries in the same batch. For greenfield scaffolds, the bootstrap/init task almost always blocks every downstream task -- link them.`
+blocked_by is a correctness signal, not a hint. Set it whenever task A literally cannot start until task B lands: bootstrap blocks all downstream tasks, "Install X" blocks "Use X", "Add schema" blocks "Query schema", follow-ups discovered while working on X get blocked_by=X (discovered-from). In segments_create_tasks, "#0".."#N" references earlier batch entries. Creating a scaffolded batch without linking the obvious dependency chain is a correctness mistake, not a style choice.`
 
 func handleMCP(s *store.Store, req map[string]interface{}) map[string]interface{} {
 	method, _ := req["method"].(string)
@@ -1885,41 +1923,41 @@ func mcpToolDefs() []map[string]interface{} {
 				"project_id": optProject,
 				"status":     prop("string", "Optional filter: todo | in_progress | done | closed | blocker"),
 			})},
-		{"name": "segments_create_task", "description": "Create a single task. For two or more tasks, ALWAYS prefer segments_create_tasks (one call, much cheaper, supports cross-task blocked_by refs).",
+		{"name": "segments_create_task", "description": "Create a single task. For two or more tasks, ALWAYS prefer segments_create_tasks (one call, much cheaper, supports cross-task blocked_by refs). Always pass priority (1/2/3) and set blocked_by when a hard dependency exists.",
 			"inputSchema": schema([]string{"title"}, map[string]interface{}{
 				"project_id": optProject,
 				"title":      prop("string", "Task title"),
 				"body":       prop("string", "Self-contained description: what to do, file paths, constraints, expected outcome. A fresh session must be able to pick it up from this alone."),
-				"priority":   prop("number", "Integer. 1=urgent/NOW, 2=normal session work, 3=backlog/future. Always pick 1, 2, or 3 when creating; 0 is legacy-only."),
-				"blocked_by": prop("string", "Task ID of a hard blocker. Set this whenever task A literally cannot start until task B lands (e.g. bootstrap blocks all downstream work)."),
+				"priority":   prop("number", "Integer 1, 2, or 3 -- pick one every time you create. 1=URGENT (\"drop everything\", broken build, blocking other work). 2=NORMAL (regular session work; default when the intent is now-or-next). 3=BACKLOG (\"sometime\"/idea/future). 0 is legacy-unset -- do NOT pick 0 when creating."),
+				"blocked_by": prop("string", "Task ID of a hard blocker. REQUIRED whenever this task literally cannot start until the blocker lands. Common cases: bootstrap blocks downstream, \"Install X\" blocks \"Use X\", schema migration blocks feature that queries it, task discovered while working on X -> blocked_by=<X>. Leave empty only for genuinely independent tasks."),
 			})},
-		{"name": "segments_create_tasks", "description": "Create multiple tasks in one call. PREFERRED for planning/scaffolding -- scaffold a whole queue in one round-trip instead of N separate calls. The 'tasks' argument MUST be a real JSON array of objects (NOT a JSON-encoded string). In blocked_by, '#0'..'#N' references earlier entries in the same batch (resolved to their new UUIDs) -- use this for dependency chains like bootstrap -> downstream tasks.",
+		{"name": "segments_create_tasks", "description": "Create multiple tasks in one call. PREFERRED for planning/scaffolding -- scaffold a whole queue in one round-trip instead of N separate calls. The 'tasks' argument MUST be a real JSON array of objects (NOT a JSON-encoded string). Set priority (1/2/3) on every entry. In blocked_by, '#0'..'#N' references earlier entries in the same batch (resolved to their new UUIDs). Link obvious dependency chains: for a greenfield scaffold, put the bootstrap/init task at #0 and every downstream task gets blocked_by=\"#0\". Creating a scaffold batch without linking obvious dependencies is a correctness mistake, not a style choice.",
 			"inputSchema": schema([]string{"tasks"}, map[string]interface{}{
 				"project_id": optProject,
 				"tasks": map[string]interface{}{
 					"type":        "array",
-					"description": "JSON array of task objects (NOT a stringified array). Each object: {title, body?, priority?, blocked_by?}. priority is an integer 1/2/3 based on user intent.",
+					"description": "JSON array of task objects (NOT a stringified array). Each object: {title, body?, priority, blocked_by?}. Set priority (1/2/3) on every task and blocked_by on every task that has a hard dependency.",
 					"items": map[string]interface{}{
 						"type":     "object",
 						"required": []string{"title"},
 						"properties": map[string]interface{}{
 							"title":      prop("string", "Task title"),
-							"body":       prop("string", "Self-contained description"),
-							"priority":   prop("number", "Integer. 1=urgent/NOW, 2=normal session work, 3=backlog/future. Pick 1/2/3 based on user intent."),
-							"blocked_by": prop("string", "Task ID or '#<index>' of an earlier entry in this batch. Use '#0' to link to the first task (e.g. when everything depends on a bootstrap task)."),
+							"body":       prop("string", "Self-contained description: what to do, file paths, constraints, expected outcome."),
+							"priority":   prop("number", "Integer 1, 2, or 3 -- pick one per task. 1=URGENT (drop-everything, broken build, blocking other work). 2=NORMAL (regular session work; default when unsure). 3=BACKLOG (someday/idea/future). Do NOT pick 0 when creating."),
+							"blocked_by": prop("string", "Task ID or '#<index>' of an earlier entry in this batch. Use '#0' when everything depends on a bootstrap task. REQUIRED whenever this task literally cannot start until the blocker lands (bootstrap -> downstream, Install X -> Use X, schema -> feature, discovered-from parent -> child). Omit ONLY for genuinely independent tasks."),
 						},
 					},
 				},
 			})},
-		{"name": "segments_update_task", "description": "Update a task. Only provided fields are changed; omitted fields are preserved.",
+		{"name": "segments_update_task", "description": "Update a task. Only provided fields are changed; omitted fields are preserved. Use status=in_progress when you start working on a task and status=done when it lands.",
 			"inputSchema": schema([]string{"task_id"}, map[string]interface{}{
 				"project_id": optProject,
 				"task_id":    prop("string", "Task ID"),
 				"title":      prop("string", "New title"),
 				"body":       prop("string", "New body/description"),
-				"status":     prop("string", "todo | in_progress | done | closed | blocker"),
-				"priority":   prop("number", "Integer. 1=urgent/NOW, 2=normal session work, 3=backlog/future. 0=unset (legacy only)."),
-				"blocked_by": prop("string", "ID of blocking task"),
+				"status":     prop("string", "todo | in_progress | done | closed | blocker. Set in_progress when you pick a task up; done when the work lands."),
+				"priority":   prop("number", "Integer. 1=URGENT (drop everything / blocking work). 2=NORMAL (regular session work). 3=BACKLOG (someday/idea/future). 0=unset is legacy-only."),
+				"blocked_by": prop("string", "Task ID of a hard blocker (empty to clear). Set whenever this task literally cannot start until the blocker lands."),
 			})},
 		{"name": "segments_delete_task", "description": "Delete a task.",
 			"inputSchema": schema([]string{"task_id"}, map[string]interface{}{
