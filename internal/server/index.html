@@ -590,12 +590,6 @@ body[data-theme="obsidian"][data-mode="light"] .row-id {
   color: var(--seg-muted);
 }
 
-/* composer blocker select */
-body[data-theme="obsidian"] .composer .blocker-select {
-  max-width: 180px; min-width: 0;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-
 /* ready filter sidebar item */
 body[data-theme="obsidian"] .side-item.ready-active {
   color: var(--seg-text); background: var(--seg-surface2); font-weight: 500;
@@ -907,11 +901,6 @@ body[data-theme="console"] .composer select {
   border: 1px solid var(--seg-line); padding: 2px 6px;
   background: var(--seg-surface); cursor: pointer;
 }
-body[data-theme="console"] .composer .blocker-select {
-  max-width: 180px; min-width: 0;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-
 /* list */
 body[data-theme="console"] .list { flex: 1; overflow: auto; font-family: var(--seg-font-mono); }
 body[data-theme="console"] .list-group-header {
@@ -1044,9 +1033,9 @@ body[data-theme="console"] .detail-meta {
   border-top: 1px dashed var(--seg-line);
   border-bottom: 1px dashed var(--seg-line);
 }
-body[data-theme="console"] .detail-meta select {
-  color: var(--seg-text); cursor: pointer; font-family: var(--seg-font-mono);
-  background: var(--seg-bg);
+body[data-theme="console"] .detail-meta select,
+body[data-theme="console"] .blocker-combo-trigger {
+  font-family: var(--seg-font-mono);
 }
 body[data-theme="console"] .detail-meta .val { color: var(--seg-text); }
 body[data-theme="console"] .detail-meta .val.mono { font-family: var(--seg-font-mono); font-size: 10.5px; }
@@ -1624,11 +1613,6 @@ body[data-theme="dossier"] .composer select {
   border: 1px solid var(--seg-rule2); padding: 2px 6px;
   background: var(--seg-surface); cursor: pointer;
 }
-body[data-theme="dossier"] .composer .blocker-select {
-  max-width: 180px; min-width: 0;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-
 /* list */
 body[data-theme="dossier"] .list { flex: 1; overflow: auto; }
 body[data-theme="dossier"] .list-group-header {
@@ -1809,10 +1793,9 @@ body[data-theme="dossier"] .detail-meta {
   color: var(--seg-muted);
 }
 body[data-theme="dossier"] .detail-meta .label { text-transform: uppercase; }
-body[data-theme="dossier"] .detail-meta select {
-  color: var(--seg-text); cursor: pointer;
-  font-family: var(--seg-font); font-size: 11px; letter-spacing: 1px;
-  background: var(--seg-bg);
+body[data-theme="dossier"] .detail-meta select,
+body[data-theme="dossier"] .blocker-combo-trigger {
+  font-family: var(--seg-font);
 }
 body[data-theme="dossier"] .detail-meta .val { color: var(--seg-text); }
 body[data-theme="dossier"] .detail-meta .val.mono { font-family: var(--seg-font); }
@@ -2087,6 +2070,214 @@ body[data-theme="dossier"] .side-item:focus-visible {
   body[data-theme="dossier"] .row-num,
   body[data-theme="dossier"] .status-pill .label { display: none; }
 }
+
+/* ===== Shared field chrome (blocker combo + native selects in detail-meta) ===== */
+/* Grid cell that can shrink past intrinsic content so the trigger ellipses. */
+.blocker-cell {
+  display: block; min-width: 0; max-width: 100%;
+}
+.blocker-combo {
+  position: relative; display: block;
+  min-width: 0; max-width: 100%;
+}
+.composer .blocker-combo {
+  display: inline-block;
+  max-width: 240px;
+}
+.detail-meta .blocker-combo { width: 100%; }
+.blocker-combo-trigger {
+  display: flex; align-items: center; gap: 6px;
+  width: 100%; min-width: 0; max-width: 100%;
+  padding: 3px 24px 3px 8px;
+  background: var(--seg-surface); color: var(--seg-text);
+  border: 1px solid var(--seg-line); border-radius: 3px;
+  font: inherit; line-height: 1.6;
+  text-align: left; cursor: pointer;
+  box-sizing: border-box;
+}
+.blocker-combo-trigger:hover { border-color: var(--seg-line2, var(--seg-line)); }
+.blocker-combo-trigger:focus-visible { outline: 1px solid var(--seg-accent); outline-offset: 1px; }
+.blocker-combo-label {
+  flex: 1 1 auto; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.blocker-combo-label.is-placeholder { color: var(--seg-muted); }
+.blocker-combo-chev {
+  position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+  color: var(--seg-faint); font-size: 10px; line-height: 1;
+  pointer-events: none;
+}
+
+/* Native selects in detail-meta: dress them to match the combo trigger above.
+   appearance:none kills the browser's built-in chevron so ours is the only one. */
+.seg-select-wrap {
+  position: relative; display: block; min-width: 0; max-width: 100%;
+}
+.seg-select-wrap::after {
+  content: "\25BE";
+  position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+  color: var(--seg-faint); font-size: 10px; line-height: 1;
+  pointer-events: none;
+}
+.detail-meta select {
+  appearance: none; -webkit-appearance: none; -moz-appearance: none;
+  display: block; width: 100%; max-width: 100%; min-width: 0;
+  box-sizing: border-box;
+  padding: 3px 24px 3px 8px;
+  background: var(--seg-surface); color: var(--seg-text);
+  border: 1px solid var(--seg-line); border-radius: 3px;
+  font: inherit; line-height: 1.6;
+  text-align: left; cursor: pointer;
+  text-overflow: ellipsis;
+}
+.detail-meta select:hover { border-color: var(--seg-line2, var(--seg-line)); }
+.detail-meta select:focus-visible { outline: 1px solid var(--seg-accent); outline-offset: 1px; }
+/* Make rows visually consistent: every value cell gets the same vertical box. */
+.detail-meta > span { min-height: 26px; display: flex; align-items: center; min-width: 0; }
+
+/* Popup: position: fixed so it escapes any ancestor `overflow: hidden`
+   (the detail pane clips otherwise). JS places it using the trigger's
+   viewport rect and keeps it inside the visible window. */
+.blocker-combo-pop {
+  position: fixed; z-index: 9999;
+  top: 0; left: 0;
+  width: 360px;
+  max-width: calc(100vw - 16px);
+  background: var(--seg-surface); color: var(--seg-text);
+  border: 1px solid var(--seg-line2, var(--seg-line));
+  border-radius: 5px;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.45), 0 2px 8px rgba(0,0,0,0.3);
+  padding: 6px;
+  display: flex; flex-direction: column; gap: 6px;
+  box-sizing: border-box;
+}
+body[data-mode="light"] .blocker-combo-pop {
+  box-shadow: 0 10px 28px rgba(0,0,0,0.18), 0 2px 8px rgba(0,0,0,0.10);
+}
+.blocker-combo-input {
+  width: 100%; box-sizing: border-box;
+  background: var(--seg-bg); color: var(--seg-text);
+  border: 1px solid var(--seg-line); border-radius: 3px;
+  padding: 5px 8px; font: inherit; font-size: 12px;
+}
+.blocker-combo-input::placeholder { color: var(--seg-faint); }
+.blocker-combo-input:focus { outline: 1px solid var(--seg-accent); outline-offset: 0; border-color: var(--seg-accent); }
+.blocker-combo-toggle {
+  display: flex; align-items: center; gap: 6px;
+  padding: 0 4px;
+  font-size: 11px; color: var(--seg-muted);
+  cursor: pointer; user-select: none;
+}
+/* Hide native checkbox but keep it focusable / clickable via label */
+.blocker-combo-toggle-input {
+  position: absolute; opacity: 0; pointer-events: none;
+  width: 0; height: 0; margin: 0;
+}
+.blocker-combo-toggle-box {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 12px; height: 12px; flex: 0 0 auto;
+  border: 1px solid var(--seg-line2, var(--seg-line));
+  background: var(--seg-bg);
+  border-radius: 2px;
+  font-size: 10px; line-height: 1;
+  color: transparent;
+  transition: background 120ms, color 120ms, border-color 120ms;
+}
+.blocker-combo-toggle-input:checked + .blocker-combo-toggle-box {
+  background: var(--seg-accent);
+  border-color: var(--seg-accent);
+  color: var(--seg-bg);
+}
+.blocker-combo-toggle-input:checked + .blocker-combo-toggle-box::after {
+  content: "\2713";
+}
+.blocker-combo-toggle-input:focus-visible + .blocker-combo-toggle-box {
+  outline: 1px solid var(--seg-accent); outline-offset: 2px;
+}
+.blocker-combo-count {
+  margin-left: auto; color: var(--seg-faint); font-size: 10.5px;
+  font-family: var(--seg-font-mono, ui-monospace, monospace);
+}
+.blocker-combo-list {
+  max-height: 280px; overflow-y: auto; overflow-x: hidden;
+  display: flex; flex-direction: column;
+  border-top: 1px solid var(--seg-line);
+  padding-top: 4px;
+}
+.blocker-combo-empty {
+  padding: 10px 6px; color: var(--seg-faint); font-size: 11.5px;
+  text-align: center;
+}
+.blocker-combo-opt {
+  display: grid; grid-template-columns: 8px 72px 1fr auto;
+  gap: 8px; align-items: center;
+  padding: 5px 6px; font-size: 12px; cursor: pointer;
+  border-radius: 3px; min-width: 0;
+}
+.blocker-combo-opt.none { grid-template-columns: 1fr; color: var(--seg-muted); font-style: italic; }
+.blocker-combo-opt.selected,
+.blocker-combo-opt:hover {
+  background: var(--seg-accent-dim, var(--seg-surface2, rgba(255,255,255,0.06)));
+}
+.blocker-combo-opt-status {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--seg-todo);
+}
+.blocker-combo-opt-status.s-in_progress { background: var(--seg-inprog); }
+.blocker-combo-opt-status.s-blocker { background: var(--seg-blocker); }
+.blocker-combo-opt-status.s-done { background: var(--seg-done); }
+.blocker-combo-opt-status.s-closed { background: var(--seg-closed); }
+.blocker-combo-opt-id {
+  color: var(--seg-faint); font-family: var(--seg-font-mono, ui-monospace, monospace);
+  font-size: 11px; letter-spacing: 0.2px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.blocker-combo-opt-title {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+  color: var(--seg-text);
+}
+.blocker-combo-opt-pri {
+  color: var(--seg-faint); font-size: 10.5px;
+  font-family: var(--seg-font-mono, ui-monospace, monospace);
+}
+
+/* Theme: obsidian. Rounded box with dark surface, accent check fill. */
+body[data-theme="obsidian"] .blocker-combo-toggle-box { border-radius: 3px; }
+
+/* Theme: console. Monospace [x]/[ ] look. */
+body[data-theme="console"] .blocker-combo-toggle-box {
+  width: 18px; height: 14px;
+  border: none; border-radius: 0;
+  background: transparent; color: var(--seg-muted);
+  font-family: var(--seg-font-mono);
+  font-size: 11px;
+}
+body[data-theme="console"] .blocker-combo-toggle-box::before { content: "[ ]"; }
+body[data-theme="console"] .blocker-combo-toggle-input:checked + .blocker-combo-toggle-box {
+  background: transparent; color: var(--seg-accent); border: none;
+}
+body[data-theme="console"] .blocker-combo-toggle-input:checked + .blocker-combo-toggle-box::before { content: "[x]"; }
+body[data-theme="console"] .blocker-combo-toggle-input:checked + .blocker-combo-toggle-box::after { content: ""; }
+
+/* Theme: dossier. Serif, circular pip. */
+body[data-theme="dossier"] .blocker-combo-toggle-box {
+  border-radius: 50%;
+  border: 1px solid var(--seg-rule2, var(--seg-line2, var(--seg-line)));
+  width: 13px; height: 13px;
+}
+body[data-theme="dossier"] .blocker-combo-toggle-input:checked + .blocker-combo-toggle-box {
+  background: var(--seg-accent);
+  border-color: var(--seg-accent);
+  color: var(--seg-bg);
+}
+body[data-theme="dossier"] .blocker-combo-toggle-input:checked + .blocker-combo-toggle-box::after {
+  content: "\00B7"; font-size: 18px; line-height: 1; color: var(--seg-bg);
+  transform: translateY(-2px);
+}
+body[data-theme="dossier"] .blocker-combo-toggle {
+  font-family: var(--seg-font-serif, var(--seg-font));
+  letter-spacing: 0.5px; text-transform: uppercase; font-size: 10px;
+}
 </style>
 </head>
 <body data-theme="obsidian" data-mode="dark">
@@ -2113,9 +2304,9 @@ const Store = {
   tasks: [],
   activeProjectId: loadPref('project', null),
   selectedId: null,
-  view: 'list',                  // list | kanban | graph
+  view: loadPref('ui.view', 'list'),       // list | kanban | graph (persisted)
   search: '',
-  filter: null,                  // null | 'ready'
+  filter: loadPref('ui.filter', null),     // null | 'ready' (persisted)
   composerOpen: false,
   composerTitle: '',             // staged new-task title (survives re-render)
   composerBody: '',
@@ -2131,6 +2322,7 @@ const Store = {
   entering: {},                  // id -> timestamp for enter animation
   agentLog: [],                  // rolling log of WS events for console theme tail
   _graphContentW: 0,             // measured .content width; drives graph wrapping
+  combo: null,                   // null | { scope, query, cursor, showFinished }
 };
 
 function pushAgentLog(msg) {
@@ -2206,7 +2398,131 @@ const Util = {
     n = n || 8;
     return id.length > n ? id.slice(0, n) : id;
   },
+  fuzzyOrdered(needle, haystack) {
+    // all chars of needle appear in order somewhere in haystack
+    if (!needle) return true;
+    let i = 0;
+    for (let j = 0; j < haystack.length && i < needle.length; j++) {
+      if (haystack[j] === needle[i]) i++;
+    }
+    return i === needle.length;
+  },
 };
+
+// ===================================================================
+// Blocker combobox helpers
+// ===================================================================
+function filterBlockerCandidates(q, excludeId, showFinished) {
+  const statusRank = { in_progress: 0, blocker: 1, todo: 2, done: 3, closed: 4 };
+  const candidates = Store.tasks.filter(t => {
+    if (excludeId && t.id === excludeId) return false;
+    if (!showFinished && (t.status === 'done' || t.status === 'closed')) return false;
+    return true;
+  });
+  if (!q) {
+    return candidates.slice().sort((a, b) => {
+      const sa = statusRank[a.status] == null ? 9 : statusRank[a.status];
+      const sb = statusRank[b.status] == null ? 9 : statusRank[b.status];
+      if (sa !== sb) return sa - sb;
+      const pa = (a.priority || 9), pb = (b.priority || 9);
+      if (pa !== pb) return pa - pb;
+      return (a.title || '').localeCompare(b.title || '');
+    });
+  }
+  const n = q.toLowerCase().trim();
+  const scored = [];
+  for (const t of candidates) {
+    const title = (t.title || '').toLowerCase();
+    const id = (t.id || '').toLowerCase();
+    let score = 0;
+    if (title.startsWith(n)) score = 1000;
+    else if (title.includes(n)) score = 500;
+    else if (Util.fuzzyOrdered(n, title)) score = 100;
+    else if (id.startsWith(n)) score = 50;
+    if (score > 0) scored.push({ t, score });
+  }
+  scored.sort((a, b) =>
+    b.score - a.score ||
+    (a.t.title || '').length - (b.t.title || '').length ||
+    (a.t.title || '').localeCompare(b.t.title || '')
+  );
+  return scored.map(x => x.t);
+}
+
+function renderBlockerCombo(scope, currentId, excludeId) {
+  const byId = tasksById();
+  const current = currentId ? byId[currentId] : null;
+  const open = !!(Store.combo && Store.combo.scope === scope);
+  const triggerLabel = current
+    ? (Util.shortId(current.id, 8) + ' \u2014 ' + current.title)
+    : '\u2014 none \u2014';
+  const triggerTitle = current ? current.title : 'No blocker';
+  const triggerCls = 'blocker-combo-label' + (current ? '' : ' is-placeholder');
+  const trigger =
+    '<button type="button" class="blocker-combo-trigger" data-act="blocker-combo-open"' +
+      ' data-scope="' + scope + '" aria-haspopup="listbox" aria-expanded="' + (open ? 'true' : 'false') + '"' +
+      ' title="' + Util.esc(triggerTitle) + '">' +
+      '<span class="' + triggerCls + '">' + Util.esc(triggerLabel) + '</span>' +
+      '<span class="blocker-combo-chev" aria-hidden="true">\u25BE</span>' +
+    '</button>';
+
+  if (!open) {
+    return '<div class="blocker-combo" data-scope="' + scope + '" data-exclude="' +
+      Util.esc(excludeId || '') + '">' + trigger + '</div>';
+  }
+
+  const query = Store.combo.query || '';
+  const showFinished = !!Store.combo.showFinished;
+  const items = filterBlockerCandidates(query, excludeId, showFinished);
+  const maxIdx = items.length; // includes the 'none' entry at index 0
+  let cursor = Store.combo.cursor | 0;
+  if (cursor < 0) cursor = 0;
+  if (cursor > maxIdx) cursor = maxIdx;
+
+  const noneSel = cursor === 0 ? ' selected' : '';
+  const noneOpt =
+    '<div class="blocker-combo-opt none' + noneSel + '" role="option"' +
+      ' data-act="blocker-combo-pick" data-scope="' + scope + '"' +
+      ' data-id="" data-idx="0">\u2014 none \u2014</div>';
+
+  const list = items.length === 0
+    ? '<div class="blocker-combo-empty">no matches' + (!showFinished ? ' (try \u201Cshow finished\u201D)' : '') + '</div>'
+    : items.map((t, i) => {
+        const idx = i + 1;
+        const sel = idx === cursor ? ' selected' : '';
+        const pri = (t.priority != null && t.priority !== 0) ? 'P' + t.priority : '';
+        return '<div class="blocker-combo-opt' + sel + '" role="option"' +
+          ' data-act="blocker-combo-pick" data-scope="' + scope + '"' +
+          ' data-id="' + Util.esc(t.id) + '" data-idx="' + idx + '"' +
+          ' title="' + Util.esc(t.title) + '">' +
+          '<span class="blocker-combo-opt-status s-' + t.status + '" aria-hidden="true"></span>' +
+          '<span class="blocker-combo-opt-id">' + Util.esc(Util.shortId(t.id, 8)) + '</span>' +
+          '<span class="blocker-combo-opt-title">' + Util.esc(t.title) + '</span>' +
+          '<span class="blocker-combo-opt-pri">' + pri + '</span>' +
+        '</div>';
+      }).join('');
+
+  return '<div class="blocker-combo open" data-scope="' + scope + '" data-exclude="' +
+    Util.esc(excludeId || '') + '">' +
+    trigger +
+    '<div class="blocker-combo-pop" role="dialog" aria-label="Select blocker">' +
+      '<input class="blocker-combo-input" type="text" placeholder="Search tasks\u2026"' +
+        ' value="' + Util.esc(query) + '"' +
+        ' data-act="blocker-combo-input" data-scope="' + scope + '"' +
+        ' autocomplete="off" spellcheck="false">' +
+      '<label class="blocker-combo-toggle">' +
+        '<input type="checkbox" class="blocker-combo-toggle-input"' +
+          (showFinished ? ' checked' : '') +
+          ' data-act="blocker-combo-toggle-finished" data-scope="' + scope + '">' +
+        '<span class="blocker-combo-toggle-box" aria-hidden="true"></span>' +
+        '<span>show finished</span>' +
+        '<span class="blocker-combo-count">' + items.length + ' / ' +
+          Store.tasks.filter(t => !excludeId || t.id !== excludeId).length + '</span>' +
+      '</label>' +
+      '<div class="blocker-combo-list" role="listbox">' + noneOpt + list + '</div>' +
+    '</div>' +
+  '</div>';
+}
 
 // ===================================================================
 // API layer
@@ -2413,14 +2729,110 @@ async function loadTasks() {
 // Actions (event handlers)
 // ===================================================================
 const Actions = {
-  selectTask(id) { Store.selectedId = id; render(); },
-  clearSelection() { Store.selectedId = null; render(); },
-  setView(v) { Store.view = v; render(); },
+  selectTask(id) { Store.selectedId = id; Store.combo = null; render(); },
+  clearSelection() { Store.selectedId = null; Store.combo = null; render(); },
+  setView(v) {
+    Store.view = v;
+    savePref('ui.view', v);
+    Store.combo = null;
+    render();
+  },
   setSearch(v) { Store.search = v; render({ preserveFocus: '.search input' }); },
   toggleReadyFilter() {
     Store.filter = Store.filter === 'ready' ? null : 'ready';
+    savePref('ui.filter', Store.filter);
     Store.selectedId = null;
+    Store.combo = null;
     render();
+  },
+  openBlockerCombo(scope) {
+    const already = Store.combo && Store.combo.scope === scope;
+    if (already) { Store.combo = null; render(); return; }
+    // Figure out the current selection so we can pre-highlight it.
+    let currentId = null;
+    let excludeId = null;
+    if (scope === 'detail') {
+      const t = Store.selectedId && Store.tasks.find(x => x.id === Store.selectedId);
+      currentId = t && t.blocked_by ? t.blocked_by : null;
+      excludeId = Store.selectedId;
+    } else if (scope === 'composer') {
+      currentId = Store.composerBlocker || null;
+    }
+    // If the current blocker is finished, auto-show-finished so it's visible.
+    let showFinished = false;
+    if (currentId) {
+      const cur = Store.tasks.find(x => x.id === currentId);
+      if (cur && (cur.status === 'done' || cur.status === 'closed')) showFinished = true;
+    }
+    const items = filterBlockerCandidates('', excludeId, showFinished);
+    let cursor = 0; // 0 = "none"
+    if (currentId) {
+      const idx = items.findIndex(t => t.id === currentId);
+      if (idx >= 0) cursor = idx + 1;
+    }
+    Store.combo = { scope, query: '', cursor, showFinished };
+    render({ focus: '.blocker-combo.open[data-scope="' + scope + '"] .blocker-combo-input' });
+  },
+  closeBlockerCombo() {
+    if (!Store.combo) return;
+    Store.combo = null;
+    render();
+  },
+  setBlockerComboQuery(q) {
+    if (!Store.combo) return;
+    Store.combo.query = q;
+    Store.combo.cursor = 0;
+    const scope = Store.combo.scope;
+    render({ preserveFocus: '.blocker-combo.open[data-scope="' + scope + '"] .blocker-combo-input' });
+  },
+  toggleBlockerComboShowFinished() {
+    if (!Store.combo) return;
+    Store.combo.showFinished = !Store.combo.showFinished;
+    Store.combo.cursor = 0;
+    const scope = Store.combo.scope;
+    render({ focus: '.blocker-combo.open[data-scope="' + scope + '"] .blocker-combo-input' });
+  },
+  moveBlockerComboCursor(dir) {
+    if (!Store.combo) return;
+    const scope = Store.combo.scope;
+    let excludeId = null;
+    if (scope === 'detail') excludeId = Store.selectedId;
+    const items = filterBlockerCandidates(Store.combo.query || '', excludeId, !!Store.combo.showFinished);
+    const max = items.length; // 0 = "none" row, then items
+    let c = (Store.combo.cursor | 0) + dir;
+    if (c < 0) c = 0;
+    if (c > max) c = max;
+    Store.combo.cursor = c;
+    render({ preserveFocus: '.blocker-combo.open[data-scope="' + scope + '"] .blocker-combo-input' });
+  },
+  async commitBlockerComboAtCursor() {
+    if (!Store.combo) return;
+    const scope = Store.combo.scope;
+    let excludeId = null;
+    if (scope === 'detail') excludeId = Store.selectedId;
+    const items = filterBlockerCandidates(Store.combo.query || '', excludeId, !!Store.combo.showFinished);
+    const cursor = Store.combo.cursor | 0;
+    let id = '';
+    if (cursor === 0) id = ''; // none
+    else {
+      const item = items[cursor - 1];
+      if (item) id = item.id;
+    }
+    await this.pickBlocker(scope, id);
+  },
+  async pickBlocker(scope, id) {
+    Store.combo = null;
+    if (scope === 'composer') {
+      Store.composerBlocker = id || '';
+      render();
+      return;
+    }
+    if (scope === 'detail') {
+      const sel = Store.selectedId;
+      render();
+      if (sel) await Actions.saveTaskEdit(sel, { blocked_by: id || '' });
+      return;
+    }
   },
   openComposer() {
     Store.composerOpen = true;
@@ -2802,9 +3214,6 @@ function obsSidebar(T, counts, readyCount) {
 function obsComposer(T) {
   const stagedPri = parseInt(app.dataset.composerPri || '2', 10);
   const stagedBlk = Store.composerBlocker || '';
-  const blockerOpts = '<option value="">— none —</option>' + Store.tasks.map(x =>
-    '<option value="' + Util.esc(x.id) + '"' + (x.id === stagedBlk ? ' selected' : '') + '>' +
-    Util.esc(Util.shortId(x.id, 8)) + ' — ' + Util.esc((x.title || '').slice(0, 40)) + '</option>').join('');
   return '<div class="composer" role="form" aria-label="New task">' +
     '<input class="composer-title" type="text" placeholder="Task title — press Enter to create" aria-label="Title" data-act="composer-submit" value="' + Util.esc(Store.composerTitle || '') + '">' +
     '<textarea class="composer-body" rows="2" placeholder="Description (optional)" aria-label="Description" data-act="composer-body">' + Util.esc(Store.composerBody || '') + '</textarea>' +
@@ -2815,7 +3224,7 @@ function obsComposer(T) {
         return '<button class="pri-btn' + (on ? ' active' : '') + '" data-act="composer-pri" data-pri="' + p + '" aria-pressed="' + (on ? 'true' : 'false') + '">P' + p + '</button>';
       }).join('') +
       '<span class="label" style="margin-left:12px">Blocker</span>' +
-      '<select class="blocker-select" data-act="composer-blocker" aria-label="Blocker">' + blockerOpts + '</select>' +
+      renderBlockerCombo('composer', stagedBlk, null) +
       '<span class="composer-hint"><kbd>↵</kbd> create · <kbd>esc</kbd> cancel</span>' +
     '</div>' +
   '</div>';
@@ -2978,9 +3387,6 @@ function obsDetail(T, task, byId) {
   const dependents = Object.values(byId).filter(t => t.blocked_by === task.id);
   const statusOpts = Object.keys(T.statusMeta).map(s =>
     '<option value="' + s + '"' + (task.status === s ? ' selected' : '') + '>' + T.statusMeta[s].label + '</option>').join('');
-  const blockerOpts = '<option value="">— none —</option>' + Store.tasks.filter(x => x.id !== task.id).map(x =>
-    '<option value="' + Util.esc(x.id) + '"' + (task.blocked_by === x.id ? ' selected' : '') + '>' +
-    Util.esc(Util.shortId(x.id, 8)) + ' — ' + Util.esc(x.title.slice(0, 40)) + '</option>').join('');
 
   const editing = Store.editingBody !== null || Store.editingTitle !== null;
   const titleHtml = Store.editingTitle !== null
@@ -3000,13 +3406,13 @@ function obsDetail(T, task, byId) {
     titleHtml +
     '<div class="detail-meta">' +
       '<span>Status</span>' +
-      '<span><select data-act="detail-status">' + statusOpts + '</select></span>' +
+      '<span class="seg-select-wrap"><select data-act="detail-status">' + statusOpts + '</select></span>' +
       '<span>Priority</span>' +
-      '<span><select data-act="detail-priority">' +
+      '<span class="seg-select-wrap"><select data-act="detail-priority">' +
         [0, 1, 2, 3].map(p => '<option value="' + p + '"' + (task.priority === p ? ' selected' : '') + '>P' + p + '</option>').join('') +
       '</select></span>' +
       '<span>Blocked by</span>' +
-      '<span><select data-act="detail-blocker">' + blockerOpts + '</select></span>' +
+      '<span class="blocker-cell">' + renderBlockerCombo('detail', task.blocked_by || '', task.id) + '</span>' +
       '<span>Updated</span>' +
       '<span class="val mono">' + Util.esc(Util.relTime(task.updated_at)) + '</span>' +
       '<span>Created</span>' +
@@ -3190,9 +3596,6 @@ function conSidebar(T, readyCount) {
 function conComposer(T) {
   const stagedPri = parseInt(app.dataset.composerPri || '2', 10);
   const stagedBlk = Store.composerBlocker || '';
-  const blockerOpts = '<option value="">— none —</option>' + Store.tasks.map(x =>
-    '<option value="' + Util.esc(x.id) + '"' + (x.id === stagedBlk ? ' selected' : '') + '>' +
-    Util.esc(Util.shortId(x.id, 8)) + ' — ' + Util.esc((x.title || '').slice(0, 40)) + '</option>').join('');
   return '<div class="composer" role="form" aria-label="New task">' +
     '<div class="composer-input-wrap">' +
       '<span class="composer-prompt">$ create</span>' +
@@ -3206,7 +3609,7 @@ function conComposer(T) {
         return '<button class="pri-btn' + (on ? ' active' : '') + '" data-act="composer-pri" data-pri="' + p + '" aria-pressed="' + (on ? 'true' : 'false') + '">P' + p + '</button>';
       }).join('') +
       '<span class="label" style="margin-left:8px">blk</span>' +
-      '<select class="blocker-select" data-act="composer-blocker" aria-label="Blocker">' + blockerOpts + '</select>' +
+      renderBlockerCombo('composer', stagedBlk, null) +
       '<span class="composer-hint">↵ ok · esc quit</span>' +
     '</div>' +
   '</div>';
@@ -3364,9 +3767,6 @@ function conDetail(T, task, byId) {
   const statusOpts = Object.keys(T.statusMeta).map(s =>
     '<option value="' + s + '"' + (task.status === s ? ' selected' : '') + '>' +
     T.statusMeta[s].glyph + ' ' + T.statusMeta[s].label + '</option>').join('');
-  const blockerOpts = '<option value="">— none —</option>' + Store.tasks.filter(x => x.id !== task.id).map(x =>
-    '<option value="' + Util.esc(x.id) + '"' + (task.blocked_by === x.id ? ' selected' : '') + '>' +
-    Util.esc(Util.shortId(x.id, 8)) + ' — ' + Util.esc((x.title || '').slice(0, 40)) + '</option>').join('');
 
   const editing = Store.editingBody !== null || Store.editingTitle !== null;
   const titleHtml = Store.editingTitle !== null
@@ -3386,13 +3786,13 @@ function conDetail(T, task, byId) {
     titleHtml +
     '<div class="detail-meta">' +
       '<span>status</span>' +
-      '<span><select data-act="detail-status">' + statusOpts + '</select></span>' +
+      '<span class="seg-select-wrap"><select data-act="detail-status">' + statusOpts + '</select></span>' +
       '<span>priority</span>' +
-      '<span><select data-act="detail-priority">' +
+      '<span class="seg-select-wrap"><select data-act="detail-priority">' +
         [0, 1, 2, 3].map(p => '<option value="' + p + '"' + (task.priority === p ? ' selected' : '') + '>P' + p + '</option>').join('') +
       '</select></span>' +
       '<span>blocked_by</span>' +
-      '<span><select data-act="detail-blocker">' + blockerOpts + '</select></span>' +
+      '<span class="blocker-cell">' + renderBlockerCombo('detail', task.blocked_by || '', task.id) + '</span>' +
       '<span>updated</span>' +
       '<span class="val mono">' + Util.esc(Util.relTime(task.updated_at)) + '</span>' +
       '<span>created</span>' +
@@ -3572,9 +3972,6 @@ function dosSidebar(T, readyCount) {
 function dosComposer(T) {
   const stagedPri = parseInt(app.dataset.composerPri || '2', 10);
   const stagedBlk = Store.composerBlocker || '';
-  const blockerOpts = '<option value="">\u2014 none \u2014</option>' + Store.tasks.map(x =>
-    '<option value="' + Util.esc(x.id) + '"' + (x.id === stagedBlk ? ' selected' : '') + '>' +
-    Util.esc(Util.shortId(x.id, 8)) + ' \u2014 ' + Util.esc((x.title || '').slice(0, 40)) + '</option>').join('');
   return '<div class="composer" role="form" aria-label="New task">' +
     '<div class="composer-header">New Entry</div>' +
     '<input class="composer-title" type="text" placeholder="subject of the work\u2026" aria-label="Title" data-act="composer-submit" value="' + Util.esc(Store.composerTitle || '') + '">' +
@@ -3586,7 +3983,7 @@ function dosComposer(T) {
         return '<button class="pri-btn' + (on ? ' active' : '') + '" data-act="composer-pri" data-pri="' + p + '" aria-pressed="' + (on ? 'true' : 'false') + '" title="P' + p + '">' + DOS_ROMAN[p] + '</button>';
       }).join('') +
       '<span class="label" style="margin-left:12px">Blocker</span>' +
-      '<select class="blocker-select" data-act="composer-blocker" aria-label="Blocker">' + blockerOpts + '</select>' +
+      renderBlockerCombo('composer', stagedBlk, null) +
       '<span class="composer-hint">\u21B5 submit \u00B7 esc discard</span>' +
     '</div>' +
   '</div>';
@@ -3749,9 +4146,6 @@ function dosDetail(T, task, byId) {
   const statusOpts = Object.keys(T.statusMeta).map(s =>
     '<option value="' + s + '"' + (task.status === s ? ' selected' : '') + '>' +
     T.statusMeta[s].label.toUpperCase() + '</option>').join('');
-  const blockerOpts = '<option value="">\u2014 none \u2014</option>' + Store.tasks.filter(x => x.id !== task.id).map(x =>
-    '<option value="' + Util.esc(x.id) + '"' + (task.blocked_by === x.id ? ' selected' : '') + '>' +
-    Util.esc(Util.shortId(x.id, 8)) + ' \u2014 ' + Util.esc((x.title || '').slice(0, 40)) + '</option>').join('');
 
   const editing = Store.editingBody !== null || Store.editingTitle !== null;
   const titleBlock = Store.editingTitle !== null
@@ -3783,13 +4177,13 @@ function dosDetail(T, task, byId) {
     '</div>' +
     '<div class="detail-meta">' +
       '<span class="label">Status</span>' +
-      '<span><select data-act="detail-status">' + statusOpts + '</select></span>' +
+      '<span class="seg-select-wrap"><select data-act="detail-status">' + statusOpts + '</select></span>' +
       '<span class="label">Priority</span>' +
-      '<span><select data-act="detail-priority">' +
+      '<span class="seg-select-wrap"><select data-act="detail-priority">' +
         [0, 1, 2, 3].map(p => '<option value="' + p + '"' + (task.priority === p ? ' selected' : '') + '>' + DOS_ROMAN[p] + ' (P' + p + ')</option>').join('') +
       '</select></span>' +
       '<span class="label">Held by</span>' +
-      '<span><select data-act="detail-blocker">' + blockerOpts + '</select></span>' +
+      '<span class="blocker-cell">' + renderBlockerCombo('detail', task.blocked_by || '', task.id) + '</span>' +
       '<span class="label">Updated</span>' +
       '<span class="val mono">' + Util.esc(Util.relTime(task.updated_at)) + '</span>' +
       '<span class="label">Opened</span>' +
@@ -3906,6 +4300,47 @@ function render(opts) {
       }
     });
   }
+  // Combo popup uses position: fixed so it can escape ancestor overflow:hidden.
+  // Place it relative to the trigger's viewport rect, clamped to the viewport.
+  if (Store.combo && typeof requestAnimationFrame === 'function') {
+    requestAnimationFrame(positionBlockerCombo);
+  }
+}
+
+function positionBlockerCombo() {
+  if (!Store.combo) return;
+  const scope = Store.combo.scope;
+  const wrap = document.querySelector('.blocker-combo.open[data-scope="' + scope + '"]');
+  if (!wrap) return;
+  const trigger = wrap.querySelector('.blocker-combo-trigger');
+  const pop = wrap.querySelector('.blocker-combo-pop');
+  if (!trigger || !pop) return;
+  const tr = trigger.getBoundingClientRect();
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const margin = 8;
+  // Preferred width: match the trigger (but clamp).
+  const desired = Math.max(Math.min(460, vw - margin * 2), Math.min(tr.width, vw - margin * 2));
+  const width = Math.max(240, Math.min(desired, vw - margin * 2));
+  pop.style.width = width + 'px';
+  // Horizontal: right-align to the trigger by default; flip if overflow.
+  let left = tr.right - width;
+  if (left < margin) left = margin;
+  if (left + width > vw - margin) left = vw - margin - width;
+  // Vertical: below the trigger; flip above if not enough room.
+  const popH = pop.offsetHeight || 280;
+  let top = tr.bottom + 4;
+  if (top + popH > vh - margin && tr.top - popH - 4 > margin) {
+    top = tr.top - popH - 4;
+  }
+  if (top < margin) top = margin;
+  pop.style.left = Math.round(left) + 'px';
+  pop.style.top = Math.round(top) + 'px';
+  // Scroll the selected option into view (for the pre-selected blocker).
+  const selOpt = pop.querySelector('.blocker-combo-opt.selected');
+  if (selOpt && selOpt.scrollIntoView) {
+    try { selOpt.scrollIntoView({ block: 'nearest' }); } catch (e) {}
+  }
 }
 
 function applyTheme() {
@@ -3926,6 +4361,19 @@ function actOf(el) {
 
 app.addEventListener('click', async (e) => {
   const { el, act } = actOf(e.target);
+
+  // Close combo if user clicked outside it (click-through still processes the action).
+  if (Store.combo) {
+    const scope = Store.combo.scope;
+    const inside = e.target.closest && e.target.closest('.blocker-combo[data-scope="' + scope + '"]');
+    const isOpenAct = act === 'blocker-combo-open' && el && el.dataset && el.dataset.scope === scope;
+    if (!inside && !isOpenAct) {
+      Store.combo = null;
+      if (!act) { render(); return; }
+      // fall through so the clicked action still runs; it will render.
+    }
+  }
+
   if (!act) return;
   const id = el && el.dataset ? el.dataset.id : null;
 
@@ -3980,6 +4428,16 @@ app.addEventListener('click', async (e) => {
     case 'detail-delete':
       if (Store.selectedId) await Actions.deleteTaskById(Store.selectedId);
       return;
+    case 'blocker-combo-open':
+      Actions.openBlockerCombo(el.dataset.scope);
+      return;
+    case 'blocker-combo-pick':
+      await Actions.pickBlocker(el.dataset.scope, el.dataset.id || '');
+      return;
+    case 'blocker-combo-toggle-finished':
+      // Clicking the label fires this too; the <input> change event is the canonical
+      // trigger, so avoid double-toggling here.
+      return;
   }
 });
 
@@ -3992,6 +4450,7 @@ app.addEventListener('input', (e) => {
     case 'detail-edit-body': Store.editingBody = el.value; return;
     case 'composer-submit': Store.composerTitle = el.value; return;
     case 'composer-body': Store.composerBody = el.value; return;
+    case 'blocker-combo-input': Actions.setBlockerComboQuery(el.value); return;
   }
 });
 
@@ -4006,11 +4465,8 @@ app.addEventListener('change', async (e) => {
     case 'detail-priority':
       if (Store.selectedId) await Actions.saveTaskEdit(Store.selectedId, { priority: parseInt(el.value, 10) });
       return;
-    case 'detail-blocker':
-      if (Store.selectedId) await Actions.saveTaskEdit(Store.selectedId, { blocked_by: el.value });
-      return;
-    case 'composer-blocker':
-      Store.composerBlocker = el.value || '';
+    case 'blocker-combo-toggle-finished':
+      Actions.toggleBlockerComboShowFinished();
       return;
   }
 });
@@ -4030,6 +4486,28 @@ app.addEventListener('focusout', async (e) => {
 app.addEventListener('keydown', async (e) => {
   const { el, act } = actOf(e.target);
   if (!act) return;
+  if (act === 'blocker-combo-input') {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault(); e.stopPropagation();
+      Actions.moveBlockerComboCursor(1);
+      return;
+    }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault(); e.stopPropagation();
+      Actions.moveBlockerComboCursor(-1);
+      return;
+    }
+    if (e.key === 'Enter') {
+      e.preventDefault(); e.stopPropagation();
+      await Actions.commitBlockerComboAtCursor();
+      return;
+    }
+    if (e.key === 'Escape') {
+      e.preventDefault(); e.stopPropagation();
+      Actions.closeBlockerCombo();
+      return;
+    }
+  }
   if (act === 'composer-submit' && e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
     const title = Store.composerTitle || el.value || '';
@@ -4077,6 +4555,7 @@ window.addEventListener('keydown', (e) => {
   const isInput = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
 
   if (e.key === 'Escape') {
+    if (Store.combo) { Actions.closeBlockerCombo(); e.preventDefault(); return; }
     if (Store.newProjectOpen) { Actions.closeNewProject(); e.preventDefault(); return; }
     if (Store.editingBody !== null || Store.editingTitle !== null) {
       Store.editingBody = null; Store.editingTitle = null; render(); e.preventDefault(); return;
@@ -4125,6 +4604,10 @@ async function loadServerConfig() {
     if (c && c.version) { Store.version = c.version; render(); }
   } catch (e) {}
 }
+
+// Reposition combo popup on scroll / resize so it follows the trigger.
+window.addEventListener('scroll', () => { if (Store.combo) positionBlockerCombo(); }, true);
+window.addEventListener('resize', () => { if (Store.combo) positionBlockerCombo(); });
 
 // Re-flow the graph when the window resizes. The post-render measurement
 // pass picks up the new .content width on the next render.
