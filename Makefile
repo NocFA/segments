@@ -2,7 +2,12 @@ BINARY = segments
 VERSION = $(shell git describe --tags --always --dirty)
 LDFLAGS = -ldflags "-X main.version=$(VERSION)"
 
-.PHONY: build install clean
+EXE =
+ifeq ($(OS),Windows_NT)
+  EXE = .exe
+endif
+
+.PHONY: build install stress clean
 
 build:
 	cp web/index.html internal/server/index.html
@@ -10,6 +15,9 @@ build:
 
 install: build
 	cp $(BINARY) ~/.local/bin/segments
+
+stress:
+	mkdir -p bin && go build -o bin/stress$(EXE) ./cmd/stress
 
 cross-linux-amd64:
 	CGO_ENABLED=1 GOOS=linux GOARCH=amd64 CC=x86_64-linux-musl-gcc go build $(LDFLAGS) -o $(BINARY)-linux-amd64 ./cmd/segments/
