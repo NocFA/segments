@@ -11,44 +11,113 @@ import (
 	"strings"
 	"time"
 
+	"codeberg.org/nocfa/segments/internal/analytics"
+	"codeberg.org/nocfa/segments/internal/export"
 	"codeberg.org/nocfa/segments/internal/models"
 	"codeberg.org/nocfa/segments/internal/store"
 	"gopkg.in/yaml.v3"
 )
 
 type Config struct {
-	Port      string `yaml:"port" json:"port"`
-	Bind      string `yaml:"bind" json:"bind,omitempty"`
-	DataDir   string `yaml:"data_dir" json:"data_dir"`
-	LogFile   string `yaml:"log_file" json:"log_file,omitempty"`
-	EnableMCP bool   `yaml:"enable_mcp" json:"enable_mcp,omitempty"`
-	Extension string `yaml:"extension" json:"extension,omitempty"`
+	Port        string        `yaml:"port" json:"port"`
+	Bind        string        `yaml:"bind" json:"bind,omitempty"`
+	DataDir     string        `yaml:"data_dir" json:"data_dir"`
+	LogFile     string        `yaml:"log_file" json:"log_file,omitempty"`
+	EnableMCP   bool          `yaml:"enable_mcp" json:"enable_mcp,omitempty"`
+	Extension   string        `yaml:"extension" json:"extension,omitempty"`
+	JSONLExport export.Config `yaml:"jsonl_export" json:"jsonl_export,omitempty"`
+	// Analytics is a tri-state opt-out for the local event log at
+	// ~/.segments/events.jsonl. Unset (nil) defaults to enabled; set to
+	// false in config.yaml to disable, or use SEGMENTS_ANALYTICS=0.
+	Analytics *bool  `yaml:"analytics" json:"analytics,omitempty"`
 	Version   string `yaml:"-" json:"version,omitempty"`
 }
 
 type Server struct {
-	store     *store.Store
-	hub       *Hub
-	addr      string
-	bind      string
-	pidFile   string
-	mux       *http.ServeMux
-	http      *http.Server
-	config    *Config
+	store    *store.Store
+	hub      *Hub
+	addr     string
+	bind     string
+	pidFile  string
+	mux      *http.ServeMux
+	http     *http.Server
+	config   *Config
+	exporter *export.Writer
 }
 
 func NewServer(store *store.Store, hub *Hub, cfg *Config, pidFile string) *Server {
 	s := &Server{
-		store:   store,
-		hub:     hub,
-		addr:    cfg.Port,
-		bind:    cfg.Bind,
-		pidFile: pidFile,
-		mux:     http.NewServeMux(),
-		config:  cfg,
+		store:    store,
+		hub:      hub,
+		addr:     cfg.Port,
+		bind:     cfg.Bind,
+		pidFile:  pidFile,
+		mux:      http.NewServeMux(),
+		config:   cfg,
+		exporter: export.NewWriter(cfg.JSONLExport),
 	}
 	s.routes()
 	return s
+}
+
+func (s *Server) Exporter() *export.Writer {
+	return s.exporter
+}
+
+func (s *Server) emit(typ string, data interface{}) {
+	s.hub.Broadcast(WSMessage{Type: typ, Data: data})
+	s.exporter.Emit(typ, data)
+	recordAnalyticsEvent(typ, data)
+}
+
+// recordAnalyticsEvent extracts task/project IDs from the write payload
+// and appends an event tagged source=web to the default analytics writer.
+// No agent, since web writes come from the browser.
+func recordAnalyticsEvent(typ string, data interface{}) {
+	var projectID, taskID, toStatus, recordType string
+	recordType = typ
+	switch v := data.(type) {
+	case *models.Task:
+		if v == nil {
+			return
+		}
+		projectID = v.ProjectID
+		taskID = v.ID
+		toStatus = string(v.Status)
+	case models.Task:
+		projectID = v.ProjectID
+		taskID = v.ID
+		toStatus = string(v.Status)
+	case *models.Project:
+		if v == nil {
+			return
+		}
+		projectID = v.ID
+	case models.Project:
+		projectID = v.ID
+	case map[string]string:
+		taskID = v["id"]
+		projectID = v["project_id"]
+	default:
+		return
+	}
+	if typ == "task:updated" && toStatus != "" {
+		switch toStatus {
+		case string(models.StatusInProgress):
+			recordType = "task:claimed"
+		case string(models.StatusDone):
+			recordType = "task:completed"
+		case string(models.StatusClosed):
+			recordType = "task:closed"
+		}
+	}
+	analytics.Record(analytics.Event{
+		Type:      recordType,
+		Source:    "web",
+		ProjectID: projectID,
+		TaskID:    taskID,
+		ToStatus:  toStatus,
+	})
 }
 
 func (s *Server) routes() {
@@ -170,7 +239,7 @@ func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.hub.Broadcast(WSMessage{Type: "project:created", Data: proj})
+	s.emit("project:created", proj)
 	s.writeJSON(w, proj)
 }
 
@@ -199,7 +268,7 @@ func (s *Server) handleUpdateProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.hub.Broadcast(WSMessage{Type: "project:updated", Data: proj})
+	s.emit("project:updated", proj)
 	s.writeJSON(w, proj)
 }
 
@@ -215,7 +284,7 @@ func (s *Server) handleDeleteProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.hub.Broadcast(WSMessage{Type: "project:deleted", Data: map[string]string{"id": id}})
+	s.emit("project:deleted", map[string]string{"id": id})
 	s.writeJSON(w, map[string]string{"deleted": id})
 }
 
@@ -282,7 +351,7 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.hub.Broadcast(WSMessage{Type: "task:created", Data: task})
+	s.emit("task:created", task)
 	s.writeJSON(w, task)
 }
 
@@ -339,7 +408,7 @@ func (s *Server) handleUpdateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.hub.Broadcast(WSMessage{Type: "task:updated", Data: task})
+	s.emit("task:updated", task)
 	s.writeJSON(w, task)
 }
 
@@ -361,7 +430,7 @@ func (s *Server) handleDeleteTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.hub.Broadcast(WSMessage{Type: "task:deleted", Data: map[string]string{"id": taskID}})
+	s.emit("task:deleted", map[string]string{"id": taskID, "project_id": projectID})
 	s.writeJSON(w, map[string]string{"deleted": taskID})
 }
 

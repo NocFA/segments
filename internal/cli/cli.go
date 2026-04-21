@@ -10,9 +10,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
+	"codeberg.org/nocfa/segments/internal/analytics"
+	"codeberg.org/nocfa/segments/internal/export"
 	"codeberg.org/nocfa/segments/internal/models"
 	"codeberg.org/nocfa/segments/internal/server"
 	"codeberg.org/nocfa/segments/internal/store"
@@ -30,7 +35,10 @@ var (
 	red   = lipgloss.NewStyle().Foreground(lipgloss.Color("#f87171"))
 	dim   = lipgloss.NewStyle().Foreground(lipgloss.Color("#737373"))
 	bold  = lipgloss.NewStyle().Bold(true)
-	box   = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("#333")).Padding(1, 2)
+	boxBg = lipgloss.AdaptiveColor{Dark: "#1f1f1f", Light: "#f1f1f1"}
+	box   = lipgloss.NewStyle().
+		Background(boxBg).
+		Padding(1, 2)
 )
 
 var dataDir = func() string {
@@ -86,11 +94,43 @@ func notifyServer() {
 	notifyServerEvent("", nil)
 }
 
+var (
+	exporterOnce sync.Once
+	exporter     *export.Writer
+)
+
+func exportWriter() *export.Writer {
+	exporterOnce.Do(func() {
+		cfg, err := server.LoadConfig(filepath.Join(expandPath(dataDir), "config.yaml"))
+		if err != nil || cfg == nil {
+			exporter = export.NewWriter(export.Config{})
+			return
+		}
+		exporter = export.NewWriter(cfg.JSONLExport)
+	})
+	return exporter
+}
+
 // notifyServerEvent pings the running daemon so it can broadcast a WebSocket
-// delta. If typ is non-empty, the payload is passed through as a WSMessage
-// body; otherwise it is a plain sync ping (the server will still 204 but
-// clients get no delta, which means they must wait for the next broadcast).
+// delta, appends the event to the configured JSONL export file (if any),
+// and records an analytics event tagged source=cli. Use
+// notifyServerEventFrom to override the source tag (e.g. "mcp" from the
+// MCP tool dispatch).
 func notifyServerEvent(typ string, data interface{}) {
+	notifyServerEventFrom("cli", typ, data)
+}
+
+func notifyServerEventFrom(source, typ string, data interface{}) {
+	if typ != "" {
+		recordAnalyticsEvent(source, typ, data)
+		if typ == "tasks:created" {
+			if batch, ok := data.([]*models.Task); ok {
+				exportWriter().EmitBatch("task:created", batch)
+			}
+		} else {
+			exportWriter().Emit(typ, data)
+		}
+	}
 	pid, addr, err := pidFileData()
 	if err != nil {
 		return
@@ -108,6 +148,129 @@ func notifyServerEvent(typ string, data interface{}) {
 	http.Post("http://"+addr+"/internal/sync", "application/json", bytes.NewReader(body))
 }
 
+var (
+	analyticsOnce sync.Once
+	mcpAgentMu    sync.Mutex
+	mcpAgent      *analytics.Agent
+)
+
+// initAnalytics configures the process-wide analytics writer. Called lazily
+// from any path that might record events. If the caller (e.g. a test) has
+// already set a default writer, initAnalytics leaves it alone so test
+// fixtures aren't clobbered by production defaults.
+func initAnalytics() {
+	analyticsOnce.Do(func() {
+		if analytics.Default() != nil {
+			return
+		}
+		enabled := true
+		cfg, _ := server.LoadConfig(filepath.Join(expandPath(dataDir), "config.yaml"))
+		if cfg != nil && cfg.Analytics != nil {
+			enabled = *cfg.Analytics
+		}
+		if os.Getenv("SEGMENTS_ANALYTICS") == "0" {
+			enabled = false
+		}
+		path := filepath.Join(expandPath(dataDir), "events.jsonl")
+		analytics.SetDefault(analytics.NewWriter(path, enabled))
+	})
+}
+
+// setMCPAgent stashes the client identity from MCP initialize.params.clientInfo
+// so subsequent analytics events in the same process are tagged with it.
+func setMCPAgent(name, version string) {
+	mcpAgentMu.Lock()
+	defer mcpAgentMu.Unlock()
+	if name == "" {
+		mcpAgent = nil
+		return
+	}
+	mcpAgent = &analytics.Agent{Name: name, Version: version}
+}
+
+func getMCPAgent() *analytics.Agent {
+	mcpAgentMu.Lock()
+	defer mcpAgentMu.Unlock()
+	if mcpAgent == nil {
+		return nil
+	}
+	cp := *mcpAgent
+	return &cp
+}
+
+// eventTypeForUpdate promotes generic "task:updated" to a more specific
+// verb based on the target status, so a dashboard can tell "claimed" from
+// "completed" from a plain edit without inspecting from/to.
+func eventTypeForUpdate(toStatus string) string {
+	switch toStatus {
+	case string(models.StatusInProgress):
+		return "task:claimed"
+	case string(models.StatusDone):
+		return "task:completed"
+	case string(models.StatusClosed):
+		return "task:closed"
+	}
+	return "task:updated"
+}
+
+// recordAnalyticsEvent extracts task/project IDs from data, enriches the
+// event type for status transitions, and appends an analytics event tagged
+// with source (cli|mcp|web) and the current MCP agent when applicable.
+func recordAnalyticsEvent(source, typ string, data interface{}) {
+	initAnalytics()
+
+	var projectID, taskID, toStatus string
+	switch v := data.(type) {
+	case *models.Task:
+		if v == nil {
+			return
+		}
+		projectID = v.ProjectID
+		taskID = v.ID
+		toStatus = string(v.Status)
+	case models.Task:
+		projectID = v.ProjectID
+		taskID = v.ID
+		toStatus = string(v.Status)
+	case []*models.Task:
+		for _, t := range v {
+			if t != nil {
+				recordAnalyticsEvent(source, "task:created", t)
+			}
+		}
+		return
+	case *models.Project:
+		if v == nil {
+			return
+		}
+		projectID = v.ID
+	case models.Project:
+		projectID = v.ID
+	case map[string]string:
+		taskID = v["id"]
+		projectID = v["project_id"]
+	}
+
+	recordType := typ
+	if typ == "task:updated" && toStatus != "" {
+		recordType = eventTypeForUpdate(toStatus)
+	}
+
+	var agent *analytics.Agent
+	if source == "mcp" {
+		agent = getMCPAgent()
+	}
+
+	analytics.Record(analytics.Event{
+		Type:      recordType,
+		Source:    source,
+		Agent:     agent,
+		ProjectID: projectID,
+		TaskID:    taskID,
+		ToStatus:  toStatus,
+	})
+}
+
 // aliases maps user-facing command names to internal ones.
 var aliases = map[string]string{
 	"start":   "serve",
@@ -115,6 +278,9 @@ var aliases = map[string]string{
 	"list":    "list",
 	"status":  "list",
 	"install": "setup",
+	"delete":  "rm",
+	"n":       "next",
+	"st":      "stats",
 }
 
 type cmdInfo struct {
@@ -133,16 +299,20 @@ var cmdGroups = []struct {
 	}},
 	{"Tasks", []cmdInfo{
 		{"list", "list projects and tasks", []string{"status"}},
+		{"next", "pick the best next task to work on", []string{"n"}},
+		{"stats", "dashboard: progress, agents, recent activity", []string{"st"}},
 		{"view", "view full task details", nil},
 		{"add", "create a task", nil},
 		{"done", "mark a task as done", nil},
 		{"close", "close a task", nil},
+		{"rm", "delete a task", []string{"delete"}},
 		{"rename", "rename a project", nil},
 	}},
 	{"Setup", []cmdInfo{
 		{"setup", "configure integrations (required first)", []string{"install"}},
 		{"init", "initialize a project in the current directory", nil},
 		{"beads", "import tasks from Beads", nil},
+		{"export", "dump task state as JSONL for git-workflow snapshots", nil},
 		{"remove", "remove a project", nil},
 		{"uninstall", "remove segments and all data", nil},
 	}},
@@ -279,6 +449,10 @@ func Run(args []string, version string) error {
 		return runInit(s)
 	case "list":
 		return runList(s, rest)
+	case "next":
+		return runNext(s, rest)
+	case "stats":
+		return runStats(s, rest)
 	case "view":
 		return runView(s, rest)
 	case "add":
@@ -287,10 +461,14 @@ func Run(args []string, version string) error {
 		return runDone(s, rest)
 	case "close":
 		return runClose(s, rest)
+	case "rm":
+		return runRemoveTask(s, rest)
 	case "rename":
 		return runRename(s, rest)
 	case "beads":
 		return runBeads(s, rest)
+	case "export":
+		return runExport(s, rest)
 	case "setup":
 		return runSetup(s)
 	case "shell":
@@ -476,63 +654,42 @@ func statusStyle(status models.TaskStatus) lipgloss.Style {
 	}
 }
 
-func printTasks(s *store.Store, proj *models.Project) {
-	tasks, _ := s.ListTasks(proj.ID)
-	if len(tasks) == 0 {
-		fmt.Println("  No tasks.")
-		return
+// statusGlyph returns a styled single rune for the task's state.
+// blockedOpen overrides the glyph to the blocked marker for todo tasks whose
+// blocker is still open, so a todo never renders with its neutral glyph when
+// it is in fact unactionable.
+func statusGlyph(status models.TaskStatus, blockedOpen bool) string {
+	if status == models.StatusTodo && blockedOpen {
+		return red.Render("\u00d7")
 	}
+	switch status {
+	case models.StatusInProgress:
+		return cyan.Render("\u25b6")
+	case models.StatusTodo:
+		return dim.Render("o")
+	case models.StatusDone:
+		return green.Render("\u2713")
+	case models.StatusClosed:
+		return dim.Render("\u25ce")
+	case models.StatusBlocker:
+		return red.Render("\u00d7")
+	}
+	return " "
+}
 
-	var todo, inProgress, done, closed, blocker int
-	for _, t := range tasks {
-		switch t.Status {
-		case models.StatusTodo:
-			todo++
-		case models.StatusInProgress:
-			inProgress++
-		case models.StatusDone:
-			done++
-		case models.StatusClosed:
-			closed++
-		case models.StatusBlocker:
-			blocker++
-		}
+// priorityChip returns the priority badge as a fixed 2-visible-width chip.
+// P0/unset renders as two blank spaces so the priority column stays aligned
+// across rows.
+func priorityChip(p int) string {
+	switch p {
+	case 1:
+		return red.Render("P1")
+	case 2:
+		return yellow.Render("P2")
+	case 3:
+		return dim.Render("P3")
 	}
-
-	var counts []string
-	if todo > 0 {
-		counts = append(counts, dim.Render(strconv.Itoa(todo)+" todo"))
-	}
-	if inProgress > 0 {
-		counts = append(counts, cyan.Render(strconv.Itoa(inProgress)+" active"))
-	}
-	if blocker > 0 {
-		counts = append(counts, red.Render(strconv.Itoa(blocker)+" blocked"))
-	}
-	if done > 0 {
-		counts = append(counts, green.Render(strconv.Itoa(done)+" done"))
-	}
-	if closed > 0 {
-		counts = append(counts, dim.Render(strconv.Itoa(closed)+" closed"))
-	}
-	fmt.Println("  " + strings.Join(counts, dim.Render(" / ")))
-	fmt.Println()
-
-	for _, t := range tasks {
-		if t.Status == models.StatusClosed || t.Status == models.StatusDone {
-			continue
-		}
-		st := statusStyle(t.Status)
-		tag := st.Render(string(t.Status))
-		line := fmt.Sprintf("  %s  %-14s %s", dim.Render(t.ID[:8]), tag, t.Title)
-		if t.Priority > 0 {
-			line += "  " + priorityLabel(t.Priority)
-		}
-		if t.BlockedBy != "" {
-			line += "  " + dim.Render("blocked:"+t.BlockedBy[:8])
-		}
-		fmt.Println(line)
-	}
+	return "  "
 }
 
 func priorityLabel(p int) string {
@@ -546,6 +703,190 @@ func priorityLabel(p int) string {
 	default:
 		return ""
 	}
+}
+
+// humanAge returns a compact age string for durations: "<1m", "3m", "2h",
+// "5d", "3w". Callers typically render it as "{age} old".
+func humanAge(d time.Duration) string {
+	switch {
+	case d < time.Minute:
+		return "<1m"
+	case d < time.Hour:
+		return strconv.Itoa(int(d.Minutes())) + "m"
+	case d < 48*time.Hour:
+		return strconv.Itoa(int(d.Hours())) + "h"
+	case d < 14*24*time.Hour:
+		return strconv.Itoa(int(d.Hours()/24)) + "d"
+	default:
+		return strconv.Itoa(int(d.Hours()/(24*7))) + "w"
+	}
+}
+
+// blockedOpenFor reports whether t has a blocker that has not yet landed.
+// A missing blocker (stale reference) is treated as open so the task stays
+// in the BLOCKED section rather than silently promoting to READY.
+func blockedOpenFor(t models.Task, byID map[string]*models.Task) bool {
+	if t.BlockedBy == "" {
+		return false
+	}
+	b, ok := byID[t.BlockedBy]
+	if !ok {
+		return true
+	}
+	return b.Status != models.StatusDone && b.Status != models.StatusClosed
+}
+
+type taskSections struct {
+	inProgress []models.Task
+	ready      []models.Task
+	blocked    []models.Task
+	done       []models.Task
+	byID       map[string]*models.Task
+}
+
+// partitionTasks groups tasks into the list view's sections. With showAll
+// true, done and closed tasks go into .done sorted newest-first and capped
+// at 5 for the RECENTLY DONE section; otherwise they are omitted.
+func partitionTasks(tasks []models.Task, showAll bool) taskSections {
+	byID := make(map[string]*models.Task, len(tasks))
+	for i := range tasks {
+		byID[tasks[i].ID] = &tasks[i]
+	}
+	var out taskSections
+	out.byID = byID
+	for i := range tasks {
+		t := tasks[i]
+		blockedOpen := blockedOpenFor(t, byID)
+		switch t.Status {
+		case models.StatusInProgress:
+			out.inProgress = append(out.inProgress, t)
+		case models.StatusTodo:
+			if blockedOpen {
+				out.blocked = append(out.blocked, t)
+			} else {
+				out.ready = append(out.ready, t)
+			}
+		case models.StatusBlocker:
+			out.blocked = append(out.blocked, t)
+		case models.StatusDone, models.StatusClosed:
+			if showAll {
+				out.done = append(out.done, t)
+			}
+		}
+	}
+	if showAll {
+		sort.Slice(out.done, func(i, j int) bool {
+			return out.done[i].UpdatedAt.After(out.done[j].UpdatedAt)
+		})
+		if len(out.done) > 5 {
+			out.done = out.done[:5]
+		}
+	}
+	return out
+}
+
+// printTasks renders the sectioned task view for a single project:
+// header line, IN PROGRESS / READY / BLOCKED sections, RECENTLY DONE (with
+// -a), and a footer hint suggesting the next command.
+func printTasks(s *store.Store, proj *models.Project, showAll bool) {
+	tasks, _ := s.ListTasks(proj.ID)
+	fmt.Println()
+	if len(tasks) == 0 {
+		fmt.Println("  " + dim.Render("No tasks yet in ") + bold.Render(proj.Name) + dim.Render("."))
+		fmt.Println()
+		if isTerminal() {
+			fmt.Println(dim.Render("\u21b3 next: sg add \"your first task\" -m \"body\""))
+			fmt.Println()
+		}
+		return
+	}
+
+	secs := partitionTasks(tasks, showAll)
+
+	var done, closed int
+	var last time.Time
+	for _, t := range tasks {
+		switch t.Status {
+		case models.StatusDone:
+			done++
+		case models.StatusClosed:
+			closed++
+		}
+		if t.UpdatedAt.After(last) {
+			last = t.UpdatedAt
+		}
+	}
+
+	parts := []string{bold.Render(proj.Name), dim.Render(strconv.Itoa(len(tasks)) + " tasks")}
+	if n := len(secs.inProgress); n > 0 {
+		parts = append(parts, cyan.Render(strconv.Itoa(n)+" in progress"))
+	}
+	if n := len(secs.ready); n > 0 {
+		parts = append(parts, green.Render(strconv.Itoa(n)+" ready"))
+	}
+	if n := len(secs.blocked); n > 0 {
+		parts = append(parts, red.Render(strconv.Itoa(n)+" blocked"))
+	}
+	if done > 0 {
+		parts = append(parts, dim.Render(strconv.Itoa(done)+" done"))
+	}
+	if closed > 0 {
+		parts = append(parts, dim.Render(strconv.Itoa(closed)+" closed"))
+	}
+	header := strings.Join(parts, dim.Render(" \u00b7 "))
+	if !last.IsZero() {
+		header += "  " + dim.Render("| updated "+last.Format("15:04"))
+	}
+	fmt.Println(header)
+	fmt.Println()
+
+	printSection("IN PROGRESS", cyan, secs.inProgress, secs.byID, false)
+	printSection("READY", green, secs.ready, secs.byID, false)
+	printSection("BLOCKED", red, secs.blocked, secs.byID, false)
+	if showAll && len(secs.done) > 0 {
+		printSection("RECENTLY DONE", dim, secs.done, secs.byID, true)
+	}
+
+	if isTerminal() {
+		var hints []string
+		if len(secs.ready) > 0 {
+			hints = append(hints, "sg start "+secs.ready[0].ID[:8])
+		}
+		if !showAll && (done+closed) > 0 {
+			hints = append(hints, "sg list -a")
+		}
+		if len(hints) > 0 {
+			fmt.Println(dim.Render("\u21b3 next: " + strings.Join(hints, " \u00b7 ")))
+			fmt.Println()
+		}
+	}
+}
+
+func printSection(label string, accent lipgloss.Style, tasks []models.Task, byID map[string]*models.Task, strikeTitle bool) {
+	if len(tasks) == 0 {
+		return
+	}
+	fmt.Println(accent.Render("\u258e") + " " + bold.Render(label) + dim.Render("  ("+strconv.Itoa(len(tasks))+")"))
+	for _, t := range tasks {
+		blockedOpen := blockedOpenFor(t, byID)
+		glyph := statusGlyph(t.Status, blockedOpen)
+		chip := priorityChip(t.Priority)
+		title := t.Title
+		if strikeTitle {
+			title = dim.Strikethrough(true).Render(title)
+		}
+		line := fmt.Sprintf("  %s  %s  %s  %s",
+			dim.Render(t.ID[:8]),
+			glyph,
+			chip,
+			title,
+		)
+		if blockedOpen && !strikeTitle {
+			line += "  " + red.Render("\u2190\u2500\u2500 "+t.BlockedBy[:8])
+		}
+		fmt.Println(line)
+	}
+	fmt.Println()
 }
 
 func findTaskByPrefix(s *store.Store, prefix string) (*models.Task, *models.Project, error) {
@@ -575,39 +916,71 @@ func runView(s *store.Store, args []string) error {
 		return err
 	}
 
-	fmt.Println()
-	fmt.Println(bold.Render(task.Title))
-	fmt.Println()
-	fmt.Printf("  %s  %s\n", dim.Render("ID:      "), task.ID)
-	fmt.Printf("  %s  %s\n", dim.Render("Project: "), proj.Name+dim.Render(" ("+proj.ID[:8]+")"))
-
-	st := statusStyle(task.Status)
-	fmt.Printf("  %s  %s\n", dim.Render("Status:  "), st.Render(string(task.Status)))
-
-	if task.Priority > 0 {
-		fmt.Printf("  %s  %s\n", dim.Render("Priority:"), priorityLabel(task.Priority))
-	}
-
+	var blockerTask *models.Task
+	blockedOpen := false
 	if task.BlockedBy != "" {
-		blocker, _, _ := findTaskByPrefix(s, task.BlockedBy)
-		blockerStr := task.BlockedBy
-		if blocker != nil {
-			blockerStr = blocker.Title + dim.Render(" ("+blocker.ID[:8]+")")
+		bt, _, _ := findTaskByPrefix(s, task.BlockedBy)
+		if bt != nil {
+			blockerTask = bt
+			blockedOpen = bt.Status != models.StatusDone && bt.Status != models.StatusClosed
+		} else {
+			blockedOpen = true
 		}
-		fmt.Printf("  %s  %s\n", dim.Render("Blocked: "), blockerStr)
 	}
 
-	fmt.Printf("  %s  %s\n", dim.Render("Created: "), task.CreatedAt.Format("2006-01-02 15:04"))
-	fmt.Printf("  %s  %s\n", dim.Render("Updated: "), task.UpdatedAt.Format("2006-01-02 15:04"))
-	if task.ClosedAt != nil {
-		fmt.Printf("  %s  %s\n", dim.Render("Closed:  "), task.ClosedAt.Format("2006-01-02 15:04"))
+	glyph := statusGlyph(task.Status, blockedOpen)
+	chip := priorityChip(task.Priority)
+	age := humanAge(time.Since(task.CreatedAt))
+
+	fmt.Println()
+	fmt.Println("  " + bold.Render(task.Title))
+	fmt.Println()
+	meta := fmt.Sprintf("  %s  %s  %s",
+		glyph, chip, dim.Render(task.ID[:8]))
+	meta += dim.Render("  \u00b7  ") + proj.Name
+	meta += dim.Render("  \u00b7  " + age + " old")
+	fmt.Println(meta)
+
+	if blockedOpen {
+		blockerStr := red.Render("\u2190\u2500\u2500 " + task.BlockedBy[:8])
+		if blockerTask != nil {
+			blockerStr += "  " + dim.Render(blockerTask.Title)
+		}
+		fmt.Println("  " + blockerStr)
 	}
+
+	times := []string{"created " + task.CreatedAt.Format("2006-01-02 15:04")}
+	if !task.UpdatedAt.Equal(task.CreatedAt) {
+		times = append(times, "updated "+task.UpdatedAt.Format("2006-01-02 15:04"))
+	}
+	if task.ClosedAt != nil {
+		times = append(times, "closed "+task.ClosedAt.Format("2006-01-02 15:04"))
+	}
+	fmt.Println("  " + dim.Render(strings.Join(times, " \u00b7 ")))
 
 	if task.Body != "" {
 		fmt.Println()
-		fmt.Println(dim.Render("  ---"))
+		fmt.Println("  " + dim.Render("\u2500\u2500\u2500"))
 		for _, line := range strings.Split(task.Body, "\n") {
 			fmt.Println("  " + line)
+		}
+	}
+
+	if isTerminal() {
+		var hint string
+		switch {
+		case task.Status == models.StatusTodo && blockedOpen:
+			hint = "sg view " + task.BlockedBy[:8] + " for the blocker"
+		case task.Status == models.StatusTodo:
+			hint = "sg start " + task.ID[:8] + " to claim"
+		case task.Status == models.StatusInProgress:
+			hint = "sg done " + task.ID[:8] + " when finished"
+		case task.Status == models.StatusBlocker:
+			hint = "sg done " + task.ID[:8] + " to unblock dependents"
+		}
+		if hint != "" {
+			fmt.Println()
+			fmt.Println(dim.Render("\u21b3 " + hint))
 		}
 	}
 	fmt.Println()
@@ -636,26 +1009,7 @@ func runList(s *store.Store, args []string) error {
 	}
 
 	if proj := resolveProject(projects, hint); proj != nil {
-		fmt.Println()
-		fmt.Println(bold.Render(proj.Name) + dim.Render("  "+proj.ID[:8]))
-		printTasks(s, proj)
-		if showAll {
-			tasks, _ := s.ListTasks(proj.ID)
-			hasClosed := false
-			for _, t := range tasks {
-				if t.Status == models.StatusDone || t.Status == models.StatusClosed {
-					if !hasClosed {
-						fmt.Println()
-						fmt.Println(dim.Render("  Completed"))
-					}
-					hasClosed = true
-					st := statusStyle(t.Status)
-					tag := st.Render(string(t.Status))
-					fmt.Printf("  %s  %-14s %s\n", dim.Render(t.ID[:8]), tag, dim.Render(t.Title))
-				}
-			}
-		}
-		fmt.Println()
+		printTasks(s, proj, showAll)
 		return nil
 	}
 
@@ -667,7 +1021,8 @@ func runList(s *store.Store, args []string) error {
 	}
 
 	fmt.Println()
-	fmt.Println(bold.Render("Projects: ") + cyan.Render(strconv.Itoa(len(projects))))
+	fmt.Println(bold.Render("Projects") + dim.Render("  ("+strconv.Itoa(len(projects))+")"))
+	fmt.Println()
 	for _, p := range projects {
 		tasks, _ := s.ListTasks(p.ID)
 		var done int
@@ -681,10 +1036,483 @@ func runList(s *store.Store, args []string) error {
 		if done == len(tasks) && len(tasks) > 0 {
 			color = green
 		}
-		fmt.Printf("  %s %s (%s%s)\n", cyan.Render(p.ID[:8]), bold.Render(p.Name), color.Render(progress), dim.Render(" done"))
+		fmt.Printf("  %s  %s  %s\n", dim.Render(p.ID[:8]), bold.Render(p.Name), color.Render(progress)+dim.Render(" done"))
 	}
 	fmt.Println()
 	return nil
+}
+
+// priorityBucket orders priorities 1 < 2 < 3 < unset so the "ready" queue
+// surfaces the most important work first regardless of whether priority is
+// set. Values outside 1-3 are treated as unset.
+func priorityBucket(p int) int {
+	if p < 1 || p > 3 {
+		return 4
+	}
+	return p
+}
+
+// selectNextTask returns the ready-to-work candidates from a task list,
+// sorted in the order sg next will present them: priority ascending (with
+// unset last), then CreatedAt ascending. A task is a candidate when it is
+// status=todo AND its blocker (if any) is done or closed.
+func selectNextTask(tasks []models.Task) []models.Task {
+	byID := make(map[string]*models.Task, len(tasks))
+	for i := range tasks {
+		byID[tasks[i].ID] = &tasks[i]
+	}
+	var candidates []models.Task
+	for i := range tasks {
+		t := tasks[i]
+		if t.Status != models.StatusTodo {
+			continue
+		}
+		if blockedOpenFor(t, byID) {
+			continue
+		}
+		candidates = append(candidates, t)
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		pi, pj := priorityBucket(candidates[i].Priority), priorityBucket(candidates[j].Priority)
+		if pi != pj {
+			return pi < pj
+		}
+		return candidates[i].CreatedAt.Before(candidates[j].CreatedAt)
+	})
+	return candidates
+}
+
+func runNext(s *store.Store, args []string) error {
+	projects, err := s.ListProjects()
+	if err != nil {
+		return err
+	}
+	if len(projects) == 0 {
+		fmt.Println("No projects yet. Run " + cyan.Render("sg init") + " first.")
+		return nil
+	}
+
+	var hint string
+	for i := 0; i < len(args); i++ {
+		if args[i] == "-p" && i+1 < len(args) {
+			hint = args[i+1]
+			i++
+			continue
+		}
+		if hint == "" {
+			hint = args[i]
+		}
+	}
+	proj := resolveProject(projects, hint)
+	if proj == nil {
+		if hint != "" {
+			return fmt.Errorf("no project matching: %s", hint)
+		}
+		return fmt.Errorf("could not resolve a project; pass -p <name>")
+	}
+
+	tasks, _ := s.ListTasks(proj.ID)
+	ready := selectNextTask(tasks)
+
+	if len(ready) == 0 {
+		var inProg []models.Task
+		for _, t := range tasks {
+			if t.Status == models.StatusInProgress {
+				inProg = append(inProg, t)
+			}
+		}
+		fmt.Println()
+		if len(inProg) > 0 {
+			fmt.Println(dim.Render("No ready tasks, but you have ") + cyan.Render(strconv.Itoa(len(inProg))) + dim.Render(" in progress:"))
+			fmt.Println()
+			for _, t := range inProg {
+				fmt.Printf("  %s  %s  %s  %s\n",
+					dim.Render(t.ID[:8]),
+					statusGlyph(t.Status, false),
+					priorityChip(t.Priority),
+					t.Title,
+				)
+			}
+			fmt.Println()
+			if isTerminal() {
+				fmt.Println(dim.Render("\u21b3 sg done " + inProg[0].ID[:8] + " when finished"))
+				fmt.Println()
+			}
+		} else {
+			fmt.Println(dim.Render("No ready tasks yet \u2014 everything is done, blocked, or closed."))
+			fmt.Println()
+		}
+		return nil
+	}
+
+	headline := ready[0]
+	age := humanAge(time.Since(headline.CreatedAt))
+
+	if !isTerminal() {
+		fmt.Printf("NEXT: %s\n", headline.Title)
+		fmt.Printf("%s P%d %s old no blockers\n", headline.ID[:8], headline.Priority, age)
+		if len(ready) > 1 {
+			fmt.Println("why: oldest unblocked at this priority")
+			fmt.Println("also ready:")
+			end := len(ready)
+			if end > 4 {
+				end = 4
+			}
+			for _, t := range ready[1:end] {
+				fmt.Printf("  %s %s\n", t.ID[:8], t.Title)
+			}
+		} else {
+			fmt.Println("why: only unblocked task")
+		}
+		fmt.Printf("sg start %s\n", headline.ID[:8])
+		return nil
+	}
+
+	dimB := dim.Background(boxBg)
+	boldB := bold.Background(boxBg)
+	yellowB := yellow.Background(boxBg)
+	redB := red.Background(boxBg)
+	greenB := green.Background(boxBg)
+	pChip := func(p int) string {
+		switch p {
+		case 1:
+			return redB.Render("P1")
+		case 2:
+			return yellowB.Render("P2")
+		case 3:
+			return dimB.Render("P3")
+		}
+		return "  "
+	}
+
+	var inner strings.Builder
+	inner.WriteString(dimB.Render("NEXT UP FOR YOU"))
+	inner.WriteString("\n\n")
+	inner.WriteString(boldB.Render(headline.Title))
+	inner.WriteString("\n\n")
+	meta := dimB.Render(headline.ID[:8])
+	meta += dimB.Render("  \u00b7  ") + pChip(headline.Priority)
+	meta += dimB.Render("  \u00b7  " + age + " old")
+	meta += dimB.Render("  \u00b7  ") + greenB.Render("no blockers")
+	inner.WriteString(meta)
+
+	fmt.Println()
+	fmt.Println(box.Render(inner.String()))
+	fmt.Println()
+
+	whyLine := dim.Render("why this? ready")
+	if len(ready) > 1 {
+		whyLine += dim.Render("  \u00b7  oldest ") + priorityChip(headline.Priority) + dim.Render(" that's unblocked")
+	} else {
+		whyLine += dim.Render("  \u00b7  only unblocked task")
+	}
+	fmt.Println(whyLine)
+
+	if len(ready) > 1 {
+		fmt.Println()
+		fmt.Println(dim.Render("also ready:"))
+		end := len(ready)
+		if end > 4 {
+			end = 4
+		}
+		for _, t := range ready[1:end] {
+			fmt.Printf("  %s  %s  %s\n", green.Render("o"), dim.Render(t.ID[:8]), t.Title)
+		}
+	}
+
+	fmt.Println()
+	fmt.Println(dim.Render("\u21b3 sg start " + headline.ID[:8] + " to claim"))
+	fmt.Println()
+	return nil
+}
+
+func runStats(s *store.Store, args []string) error {
+	projects, err := s.ListProjects()
+	if err != nil {
+		return err
+	}
+	if len(projects) == 0 {
+		fmt.Println("No projects yet. Run " + cyan.Render("sg init") + " first.")
+		return nil
+	}
+
+	var hint string
+	for i := 0; i < len(args); i++ {
+		if args[i] == "-p" && i+1 < len(args) {
+			hint = args[i+1]
+			i++
+			continue
+		}
+		if hint == "" {
+			hint = args[i]
+		}
+	}
+	proj := resolveProject(projects, hint)
+	if proj == nil {
+		if hint != "" {
+			return fmt.Errorf("no project matching: %s", hint)
+		}
+		return fmt.Errorf("could not resolve a project; pass -p <name>")
+	}
+
+	initAnalytics()
+	w := analytics.Default()
+	if w == nil || !w.Enabled() {
+		fmt.Println()
+		fmt.Println(dim.Render("Analytics disabled in config (set ") + cyan.Render("analytics: true") + dim.Render(" in ~/.segments/config.yaml)."))
+		fmt.Println()
+		return nil
+	}
+	events, _ := analytics.Read(w.Path())
+	if len(events) == 0 {
+		fmt.Println()
+		fmt.Println(dim.Render("No analytics data yet. Enabled by default \u2014 run some tasks to see stats."))
+		fmt.Println()
+		return nil
+	}
+
+	tasks, _ := s.ListTasks(proj.ID)
+	secs := partitionTasks(tasks, false)
+	var done, closed int
+	for _, t := range tasks {
+		switch t.Status {
+		case models.StatusDone:
+			done++
+		case models.StatusClosed:
+			closed++
+		}
+	}
+	total := len(tasks)
+	pct := 0
+	if total > 0 {
+		pct = done * 100 / total
+	}
+
+	var projEvents []analytics.Event
+	for _, e := range events {
+		if e.ProjectID == "" || e.ProjectID == proj.ID {
+			projEvents = append(projEvents, e)
+		}
+	}
+
+	col1 := buildStatsProjectColumn(proj.Name, done, len(secs.inProgress), len(secs.ready), len(secs.blocked), total, pct)
+	col2 := buildStatsAgentsColumn(projEvents, tasks)
+	col3 := buildStatsRecentColumn(projEvents)
+
+	if !isTerminal() {
+		fmt.Println()
+		fmt.Println("-- " + strings.ToUpper(proj.Name) + " --")
+		fmt.Println(col1)
+		fmt.Println()
+		fmt.Println("-- AGENTS --")
+		fmt.Println(col2)
+		fmt.Println()
+		fmt.Println("-- RECENT --")
+		fmt.Println(col3)
+		fmt.Println()
+		return nil
+	}
+
+	padCol := func(s string, w int) string {
+		return lipgloss.NewStyle().Width(w).Padding(0, 1).Render(s)
+	}
+	fmt.Println()
+	fmt.Println(lipgloss.JoinHorizontal(lipgloss.Top,
+		padCol(col1, 34),
+		padCol(col2, 40),
+		padCol(col3, 46),
+	))
+	fmt.Println(dim.Render("\u21b3 sg next \u00b7 sg list \u00b7 sg graph"))
+	fmt.Println()
+	return nil
+}
+
+func buildStatsProjectColumn(name string, done, inProg, ready, blocked, total, pct int) string {
+	header := bold.Render(strings.ToUpper(name))
+	barWidth := 20
+	var doneW, ipW int
+	if total > 0 {
+		doneW = done * barWidth / total
+		ipW = inProg * barWidth / total
+	}
+	if doneW+ipW > barWidth {
+		ipW = barWidth - doneW
+	}
+	restW := barWidth - doneW - ipW
+	bar := green.Render(strings.Repeat("\u2593", doneW)) +
+		yellow.Render(strings.Repeat("\u2593", ipW)) +
+		dim.Render(strings.Repeat("\u2591", restW))
+
+	parts := []string{
+		green.Render(strconv.Itoa(done) + " done"),
+		yellow.Render(strconv.Itoa(inProg) + " in-flight"),
+		dim.Render(strconv.Itoa(ready) + " ready"),
+	}
+	if blocked > 0 {
+		parts = append(parts, red.Render(strconv.Itoa(blocked)+" blocked"))
+	}
+	parts = append(parts, bold.Render(strconv.Itoa(pct)+"%"))
+	counts := strings.Join(parts, dim.Render(" \u00b7 "))
+
+	return header + "\n\n" + bar + "\n\n" + counts
+}
+
+func buildStatsAgentsColumn(events []analytics.Event, tasks []models.Task) string {
+	header := bold.Render("AGENTS")
+	if len(events) == 0 {
+		return header + "\n\n" + dim.Render("no agents seen yet")
+	}
+	now := time.Now()
+
+	statusByID := map[string]models.TaskStatus{}
+	for _, t := range tasks {
+		statusByID[t.ID] = t.Status
+	}
+
+	type agentInfo struct {
+		name         string
+		lastSeen     time.Time
+		source       string
+		currentClaim string
+	}
+	agents := map[string]*agentInfo{}
+	claims := map[string]string{}
+	for _, e := range events {
+		actor := "you"
+		if e.Agent != nil && e.Agent.Name != "" {
+			actor = e.Agent.Name
+		}
+		if info, ok := agents[actor]; ok {
+			if e.Timestamp.After(info.lastSeen) {
+				info.lastSeen = e.Timestamp
+				info.source = e.Source
+			}
+		} else {
+			agents[actor] = &agentInfo{name: actor, lastSeen: e.Timestamp, source: e.Source}
+		}
+		if e.Type == "task:claimed" && e.TaskID != "" {
+			claims[e.TaskID] = actor
+		}
+		if e.TaskID != "" && (e.Type == "task:completed" || e.Type == "task:closed" || e.Type == "task:deleted") {
+			delete(claims, e.TaskID)
+		}
+	}
+	for tid, agent := range claims {
+		if statusByID[tid] == models.StatusInProgress {
+			if info, ok := agents[agent]; ok {
+				info.currentClaim = tid
+			}
+		}
+	}
+
+	var sorted []*agentInfo
+	for _, a := range agents {
+		sorted = append(sorted, a)
+	}
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].lastSeen.After(sorted[j].lastSeen)
+	})
+	if len(sorted) > 6 {
+		sorted = sorted[:6]
+	}
+
+	var lines []string
+	for _, a := range sorted {
+		age := now.Sub(a.lastSeen)
+		var dot string
+		var nameRender string
+		if a.name == "you" {
+			nameRender = bold.Render("you")
+		} else {
+			nameRender = cyan.Render(a.name)
+		}
+		switch {
+		case a.currentClaim != "":
+			dot = cyan.Render("\u25cf")
+		case age < time.Hour:
+			dot = yellow.Render("\u25d0")
+		default:
+			dot = dim.Render("o")
+		}
+		var line string
+		if a.currentClaim != "" {
+			line = fmt.Sprintf("%s %s %s %s  %s",
+				dot, nameRender,
+				dim.Render("on"), dim.Render(a.currentClaim[:8]),
+				dim.Render(humanAge(age)+" \u00b7 "+a.source))
+		} else {
+			line = fmt.Sprintf("%s %s %s  %s",
+				dot, nameRender,
+				dim.Render("idle"),
+				dim.Render(humanAge(age)+" \u00b7 "+a.source))
+		}
+		lines = append(lines, line)
+	}
+	return header + "\n\n" + strings.Join(lines, "\n")
+}
+
+func buildStatsRecentColumn(events []analytics.Event) string {
+	header := bold.Render("RECENT")
+	if len(events) == 0 {
+		return header + "\n\n" + dim.Render("no activity yet")
+	}
+	sorted := make([]analytics.Event, len(events))
+	copy(sorted, events)
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].Timestamp.After(sorted[j].Timestamp)
+	})
+	if len(sorted) > 6 {
+		sorted = sorted[:6]
+	}
+
+	var lines []string
+	for _, e := range sorted {
+		actor := "you"
+		if e.Agent != nil && e.Agent.Name != "" {
+			actor = e.Agent.Name
+		}
+		var actorRender string
+		if actor == "you" {
+			actorRender = bold.Render("you")
+		} else {
+			actorRender = cyan.Render(actor)
+		}
+		verb := eventVerb(e.Type)
+		taskSnippet := ""
+		if e.TaskID != "" {
+			taskSnippet = dim.Render(e.TaskID[:8])
+		}
+		ts := e.Timestamp.Local().Format("15:04")
+		line := fmt.Sprintf("%s %s %s %s %s",
+			dim.Render(ts), dim.Render("\u00b7"),
+			actorRender, dim.Render(verb), taskSnippet)
+		lines = append(lines, line)
+	}
+	return header + "\n\n" + strings.Join(lines, "\n")
+}
+
+func eventVerb(typ string) string {
+	switch typ {
+	case "task:created":
+		return "created"
+	case "task:claimed":
+		return "picked up"
+	case "task:completed":
+		return "completed"
+	case "task:closed":
+		return "closed"
+	case "task:deleted":
+		return "removed"
+	case "task:updated":
+		return "updated"
+	case "project:created":
+		return "made project"
+	case "project:updated":
+		return "renamed project"
+	case "project:deleted":
+		return "deleted project"
+	}
+	return typ
 }
 
 func runUninstall() error {
@@ -740,8 +1568,16 @@ func runRemoveProject(s *store.Store, args []string) error {
 	if err := s.DeleteProject(proj.ID); err != nil {
 		return err
 	}
-	fmt.Printf("Removed project %q (%s)\n", proj.Name, proj.ID[:8])
-	notifyServer()
+	notifyServerEvent("project:deleted", map[string]string{"id": proj.ID})
+	if !isTerminal() {
+		fmt.Printf("Removed project %q (%s)\n", proj.Name, proj.ID[:8])
+		return nil
+	}
+	fmt.Printf("  %s  %s%s\n",
+		dim.Render("-"),
+		dim.Render(proj.Name),
+		dim.Render("  ("+proj.ID[:8]+") removed"),
+	)
 	return nil
 }
 
@@ -806,11 +1642,23 @@ func ensureDataDir() error {
 	}
 	cfgPath := filepath.Join(dataDir, "config.yaml")
 	if !fileExists(cfgPath) {
-		yamlData := []byte("port: \"8765\"\nbind: \"127.0.0.1\"\ndata_dir: \"~/.segments\"\n")
+		yamlData := []byte(defaultConfigYAML)
 		return os.WriteFile(cfgPath, yamlData, 0644)
 	}
 	return nil
 }
+
+const defaultConfigYAML = `port: "8765"
+bind: "127.0.0.1"
+data_dir: "~/.segments"
+
+# jsonl_export:
+#   enabled: true
+#   path: ".segments/tasks.jsonl"
+#   scope: all            # all | project
+#   project_id: ""        # required when scope=project; UUID or prefix
+#   on_events: []         # subset of [created, updated, done, closed, deleted]; empty = all
+`
 
 func setupMarkerPath() string {
 	return filepath.Join(expandPath(dataDir), ".setup_complete")
@@ -857,11 +1705,11 @@ func runInit(s *store.Store) error {
 					return err
 				}
 				fmt.Printf("Created project %q (%s)\n", proj.Name, proj.ID[:8])
+				notifyServerEvent("project:created", proj)
 				if err := importBeads(s, proj.ID, beadsPath); err != nil {
 					fmt.Println(red.Render(err.Error()))
 				}
 				offerMissingIntegrations(s, cwd)
-				notifyServer()
 				return nil
 			}
 		}
@@ -875,7 +1723,7 @@ func runInit(s *store.Store) error {
 
 	offerMissingIntegrations(s, cwd)
 
-	notifyServer()
+	notifyServerEvent("project:created", proj)
 	return nil
 }
 
@@ -1010,8 +1858,17 @@ func runAdd(s *store.Store, args []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Println(t.ID)
 	notifyServerEvent("task:created", t)
+	if !isTerminal() {
+		fmt.Println(t.ID)
+		return nil
+	}
+	glyph := statusGlyph(t.Status, false)
+	chip := priorityChip(t.Priority)
+	fmt.Println()
+	fmt.Printf("  %s  %s  %s  %s\n", dim.Render(t.ID[:8]), glyph, chip, t.Title)
+	fmt.Println()
+	fmt.Println(dim.Render("\u21b3 sg start " + t.ID[:8] + " to claim"))
 	return nil
 }
 
@@ -1024,8 +1881,16 @@ func runClose(s *store.Store, args []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Println(t.ID)
 	notifyServerEvent("task:updated", t)
+	if !isTerminal() {
+		fmt.Println(t.ID)
+		return nil
+	}
+	fmt.Printf("  %s  %s%s\n",
+		dim.Render("\u25ce"),
+		dim.Render(t.Title),
+		dim.Render("  ("+t.ID[:8]+") closed"),
+	)
 	return nil
 }
 
@@ -1037,8 +1902,16 @@ func runRename(s *store.Store, args []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Println(p.ID + " " + p.Name)
 	notifyServerEvent("project:updated", p)
+	if !isTerminal() {
+		fmt.Println(p.ID + " " + p.Name)
+		return nil
+	}
+	fmt.Printf("  %s  %s %s\n",
+		green.Render("\u2713"),
+		dim.Render("renamed to"),
+		bold.Render(p.Name),
+	)
 	return nil
 }
 
@@ -1051,8 +1924,40 @@ func runDone(s *store.Store, args []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Println(t.ID)
 	notifyServerEvent("task:updated", t)
+	if !isTerminal() {
+		fmt.Println(t.ID)
+		return nil
+	}
+	fmt.Printf("  %s  %s%s\n",
+		green.Render("\u2713"),
+		t.Title,
+		dim.Render("  ("+t.ID[:8]+") marked done"),
+	)
+	return nil
+}
+
+func runRemoveTask(s *store.Store, args []string) error {
+	if len(args) < 1 {
+		return fmt.Errorf("usage: sg rm <task-id>")
+	}
+	task, proj, err := findTaskByPrefix(s, args[0])
+	if err != nil {
+		return err
+	}
+	if err := s.DeleteTask(proj.ID, task.ID); err != nil {
+		return err
+	}
+	notifyServerEvent("task:deleted", map[string]string{"id": task.ID, "project_id": proj.ID})
+	if !isTerminal() {
+		fmt.Printf("Removed task %q (%s)\n", task.Title, task.ID[:8])
+		return nil
+	}
+	fmt.Printf("  %s  %s%s\n",
+		dim.Render("-"),
+		dim.Render(task.Title),
+		dim.Render("  ("+task.ID[:8]+") removed"),
+	)
 	return nil
 }
 
@@ -1134,11 +2039,109 @@ func runBeads(s *store.Store, args []string) error {
 		return err
 	}
 	fmt.Printf("Created project: %s %s\n", proj.ID, proj.Name)
+	notifyServerEvent("project:created", proj)
 
 	if err := importBeads(s, proj.ID, beadsPath); err != nil {
 		return err
 	}
-	notifyServer()
+	return nil
+}
+
+// runExport dumps a snapshot of tasks as JSONL. The default mode exports only
+// the auto-resolved current project to .segments/tasks.jsonl so the file lives
+// in the work tree as a git-friendly index. --all switches to a cross-project
+// dump under ~/.segments/tasks.jsonl. --path overrides either default.
+func runExport(s *store.Store, args []string) error {
+	var path, hint string
+	var all bool
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--path", "-o":
+			if i+1 < len(args) {
+				path = args[i+1]
+				i++
+			}
+		case "--project", "-p":
+			if i+1 < len(args) {
+				hint = args[i+1]
+				i++
+			}
+		case "--all", "-a":
+			all = true
+		case "-h", "--help":
+			fmt.Println("usage: sg export [--path <file>] [--project <id|name>] [--all]")
+			fmt.Println("  (default)     export the current project to .segments/tasks.jsonl (git-friendly)")
+			fmt.Println("  --all, -a     export all projects to ~/.segments/tasks.jsonl")
+			fmt.Println("  --path, -o    override output path (works with default and --all)")
+			fmt.Println("  --project, -p restrict to a specific project by UUID prefix or name")
+			fmt.Println()
+			fmt.Println("Without --path, single-project mode honors jsonl_export.path from")
+			fmt.Println("~/.segments/config.yaml as an override; --all always uses the home-dir default.")
+			return nil
+		default:
+			if hint == "" && !strings.HasPrefix(args[i], "-") {
+				hint = args[i]
+			}
+		}
+	}
+
+	if all && hint != "" {
+		return fmt.Errorf("--all and --project are mutually exclusive")
+	}
+
+	projects, err := s.ListProjects()
+	if err != nil {
+		return err
+	}
+	if len(projects) == 0 {
+		return fmt.Errorf("no projects to export")
+	}
+
+	var selected []models.Project
+	if all {
+		selected = projects
+		if path == "" {
+			path = filepath.Join(expandPath(dataDir), "tasks.jsonl")
+		}
+	} else {
+		pid, err := resolveProjectIDForMCP(s, hint)
+		if err != nil {
+			return err
+		}
+		for i := range projects {
+			if projects[i].ID == pid {
+				selected = []models.Project{projects[i]}
+				break
+			}
+		}
+		if path == "" {
+			cfg, _ := server.LoadConfig(filepath.Join(expandPath(dataDir), "config.yaml"))
+			if cfg != nil && cfg.JSONLExport.Path != "" {
+				path = cfg.JSONLExport.Path
+			}
+		}
+		if path == "" {
+			path = filepath.Join(".segments", "tasks.jsonl")
+		}
+	}
+
+	var tasks []models.Task
+	for _, p := range selected {
+		ts, err := s.ListTasks(p.ID)
+		if err != nil {
+			return err
+		}
+		tasks = append(tasks, ts...)
+	}
+
+	w := export.NewWriter(export.Config{Enabled: true, Path: path})
+	n, err := w.Snapshot(path, tasks, selected)
+	if err != nil {
+		return err
+	}
+
+	resolved, _ := export.ResolvePath(path)
+	fmt.Printf("Wrote %d line(s) to %s\n", n, resolved)
 	return nil
 }
 
@@ -1871,6 +2874,13 @@ func handleMCP(s *store.Store, req map[string]interface{}) map[string]interface{
 
 	switch method {
 	case "initialize":
+		if params, ok := req["params"].(map[string]interface{}); ok {
+			if ci, ok := params["clientInfo"].(map[string]interface{}); ok {
+				name, _ := ci["name"].(string)
+				version, _ := ci["version"].(string)
+				setMCPAgent(name, version)
+			}
+		}
 		resp["result"] = map[string]interface{}{
 			"protocolVersion": negotiateProtocolVersion(req),
 			"capabilities": map[string]interface{}{
@@ -2076,6 +3086,7 @@ func callTool(s *store.Store, tool string, args map[string]interface{}) string {
 		}
 		return coerceInt(v, def)
 	}
+	notify := func(typ string, data interface{}) { notifyServerEventFrom("mcp", typ, data) }
 
 	switch tool {
 	case "segments_list_projects":
@@ -2086,14 +3097,14 @@ func callTool(s *store.Store, tool string, args map[string]interface{}) string {
 		if err != nil {
 			return errMsg(err)
 		}
-		notifyServerEvent("project:created", p)
+		notify("project:created", p)
 		return marshal(p)
 	case "segments_rename_project":
 		p, err := s.UpdateProject(str("project_id"), str("name"))
 		if err != nil {
 			return errMsg(err)
 		}
-		notifyServerEvent("project:updated", p)
+		notify("project:updated", p)
 		return marshal(p)
 	case "segments_list_tasks":
 		pid, err := resolveProjectIDForMCP(s, str("project_id"))
@@ -2129,7 +3140,7 @@ func callTool(s *store.Store, tool string, args map[string]interface{}) string {
 				return errMsg(err)
 			}
 		}
-		notifyServerEvent("task:created", t)
+		notify("task:created", t)
 		return marshal(t)
 	case "segments_create_tasks":
 		pid, err := resolveProjectIDForMCP(s, str("project_id"))
@@ -2185,7 +3196,7 @@ func callTool(s *store.Store, tool string, args map[string]interface{}) string {
 			}
 			created = append(created, t)
 		}
-		notifyServerEvent("tasks:created", created)
+		notify("tasks:created", created)
 		return marshal(created)
 	case "segments_update_task":
 		pid, err := resolveProjectIDForMCP(s, str("project_id"))
@@ -2198,7 +3209,7 @@ func callTool(s *store.Store, tool string, args map[string]interface{}) string {
 		if err != nil {
 			return errMsg(err)
 		}
-		notifyServerEvent("task:updated", t)
+		notify("task:updated", t)
 		return marshal(t)
 	case "segments_update_tasks":
 		pid, err := resolveProjectIDForMCP(s, str("project_id"))
@@ -2241,7 +3252,7 @@ func callTool(s *store.Store, tool string, args map[string]interface{}) string {
 			if err != nil {
 				return errMsg(fmt.Errorf("updates[%d]: %v", i, err))
 			}
-			notifyServerEvent("task:updated", t)
+			notify("task:updated", t)
 			updated = append(updated, t)
 		}
 		return marshal(updated)
@@ -2254,7 +3265,7 @@ func callTool(s *store.Store, tool string, args map[string]interface{}) string {
 		if err := s.DeleteTask(pid, taskID); err != nil {
 			return errMsg(err)
 		}
-		notifyServerEvent("task:deleted", map[string]string{"id": taskID, "project_id": pid})
+		notify("task:deleted", map[string]string{"id": taskID, "project_id": pid})
 		return `{"deleted": true}`
 	case "segments_delete_tasks":
 		pid, err := resolveProjectIDForMCP(s, str("project_id"))
@@ -2281,7 +3292,7 @@ func callTool(s *store.Store, tool string, args map[string]interface{}) string {
 			if err := s.DeleteTask(pid, taskID); err != nil {
 				return errMsg(fmt.Errorf("task_ids[%d]: %v", i, err))
 			}
-			notifyServerEvent("task:deleted", map[string]string{"id": taskID, "project_id": pid})
+			notify("task:deleted", map[string]string{"id": taskID, "project_id": pid})
 			deleted = append(deleted, taskID)
 		}
 		return marshal(map[string]interface{}{"deleted": deleted})
