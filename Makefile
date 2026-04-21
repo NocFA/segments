@@ -7,7 +7,7 @@ ifeq ($(OS),Windows_NT)
   EXE = .exe
 endif
 
-.PHONY: build install stress clean
+.PHONY: build install reinstall stress clean
 
 build:
 	cp web/index.html internal/server/index.html
@@ -15,6 +15,13 @@ build:
 
 install: build
 	cp $(BINARY) ~/.local/bin/segments
+
+# Dev lifecycle: export backup, stop+kill stale daemon, build, replace every
+# segments/sg binary under ~/.local/bin, restart. Use this for iterative dev
+# because `install` does not stop the running daemon (fails with "device or
+# resource busy" on Windows) and does not back up your data.
+reinstall:
+	./scripts/dev-install.sh --start
 
 stress:
 	mkdir -p bin && go build -o bin/stress$(EXE) ./cmd/stress
