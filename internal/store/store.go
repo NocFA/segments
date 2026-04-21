@@ -312,6 +312,28 @@ func (s *Store) GetTask(projectID, taskID string) (*models.Task, error) {
 	return &task, nil
 }
 
+func (s *Store) ListAllTasks() ([]models.Task, error) {
+	projects, err := s.ListProjects()
+	if err != nil {
+		return nil, err
+	}
+
+	var out []models.Task
+	for _, p := range projects {
+		tasks, err := s.ListTasks(p.ID)
+		if err != nil {
+			continue
+		}
+		for i := range tasks {
+			if tasks[i].ProjectID == "" {
+				tasks[i].ProjectID = p.ID
+			}
+		}
+		out = append(out, tasks...)
+	}
+	return out, nil
+}
+
 func (s *Store) ListTasks(projectID string) ([]models.Task, error) {
 	env, err := s.openEnv(projectID)
 	if err != nil {

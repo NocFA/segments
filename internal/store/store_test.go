@@ -137,6 +137,39 @@ func TestListTasks(t *testing.T) {
 	}
 }
 
+func TestListAllTasks(t *testing.T) {
+	s, cleanup := setupTest(t)
+	defer cleanup()
+
+	p1, _ := s.CreateProject("proj-a")
+	p2, _ := s.CreateProject("proj-b")
+	s.CreateTask(p1.ID, "a1", "", 1)
+	s.CreateTask(p1.ID, "a2", "", 2)
+	s.CreateTask(p2.ID, "b1", "", 1)
+
+	all, err := s.ListAllTasks()
+	if err != nil {
+		t.Fatalf("ListAllTasks error: %v", err)
+	}
+	if len(all) != 3 {
+		t.Fatalf("len = %d, want 3", len(all))
+	}
+
+	counts := map[string]int{}
+	for _, task := range all {
+		counts[task.ProjectID]++
+		if task.ProjectID == "" {
+			t.Errorf("task %q missing ProjectID", task.ID)
+		}
+	}
+	if counts[p1.ID] != 2 {
+		t.Errorf("proj-a count = %d, want 2", counts[p1.ID])
+	}
+	if counts[p2.ID] != 1 {
+		t.Errorf("proj-b count = %d, want 1", counts[p2.ID])
+	}
+}
+
 func TestUpdateTask(t *testing.T) {
 	s, cleanup := setupTest(t)
 	defer cleanup()

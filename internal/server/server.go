@@ -60,6 +60,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("DELETE /api/projects/{id}", s.handleDeleteProject)
 	s.mux.HandleFunc("GET /api/projects/{id}/tasks", s.handleListTasks)
 	s.mux.HandleFunc("POST /api/projects/{id}/tasks", s.handleCreateTask)
+	s.mux.HandleFunc("GET /api/tasks", s.handleListAllTasks)
 	s.mux.HandleFunc("GET /api/tasks/{id}", s.handleGetTask)
 	s.mux.HandleFunc("PUT /api/tasks/{id}", s.handleUpdateTask)
 	s.mux.HandleFunc("DELETE /api/tasks/{id}", s.handleDeleteTask)
@@ -226,6 +227,23 @@ func (s *Server) handleListTasks(w http.ResponseWriter, r *http.Request) {
 	}
 
 	tasks, err := s.store.ListTasks(projectID)
+	if err != nil {
+		s.writeError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if tasks == nil {
+		tasks = []models.Task{}
+	}
+	s.writeJSON(w, tasks)
+}
+
+func (s *Server) handleListAllTasks(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Query().Get("all") != "1" {
+		s.writeError(w, "all=1 query param required", http.StatusBadRequest)
+		return
+	}
+
+	tasks, err := s.store.ListAllTasks()
 	if err != nil {
 		s.writeError(w, err.Error(), http.StatusInternalServerError)
 		return

@@ -350,6 +350,11 @@ body[data-theme="obsidian"] .blocker-chip {
 body[data-theme="obsidian"] .blocker-chip.unresolved {
   color: var(--seg-blocker); border-color: rgba(217,122,122,0.25);
 }
+body[data-theme="obsidian"] .row-proj {
+  font-size: 10.5px; color: var(--seg-muted);
+  background: var(--seg-accent-dim); padding: 1px 6px; border-radius: 3px;
+  white-space: nowrap; flex-shrink: 0;
+}
 body[data-theme="obsidian"] .row-time {
   color: var(--seg-faint); font-size: 11.5px; font-variant-numeric: tabular-nums;
   min-width: 48px; text-align: right;
@@ -1056,6 +1061,12 @@ body[data-theme="console"] .blocker-chip {
 }
 body[data-theme="console"] .blocker-chip.unresolved { color: var(--seg-red); }
 body[data-theme="console"] .blocker-chip.resolved   { color: var(--seg-green); }
+body[data-theme="console"] .row-proj {
+  font-size: 10.5px; color: var(--seg-accent);
+  font-family: var(--seg-font-mono); white-space: nowrap;
+  border: 1px solid var(--seg-line2); padding: 0 5px; border-radius: 2px;
+  flex-shrink: 0;
+}
 body[data-theme="console"] .row-time {
   color: var(--seg-faint); font-size: 10.5px;
   min-width: 40px; text-align: right;
@@ -1875,6 +1886,13 @@ body[data-theme="dossier"] .blocker-chip.unresolved {
 body[data-theme="dossier"] .blocker-chip.resolved {
   color: var(--seg-faint); font-size: 10px;
 }
+body[data-theme="dossier"] .row-proj {
+  font-family: var(--seg-font); font-size: 9.5px; font-weight: 600;
+  letter-spacing: 1px; text-transform: uppercase;
+  color: var(--seg-muted);
+  border: 1px solid var(--seg-rule); padding: 1px 6px; border-radius: 2px;
+  white-space: nowrap; flex-shrink: 0;
+}
 body[data-theme="dossier"] .row-time {
   font-family: var(--seg-font);
   font-size: 10.5px;
@@ -2647,6 +2665,7 @@ const Store = {
   projects: [],
   tasks: [],
   activeProjectId: loadPref('project', null),
+  scope: loadPref('ui.scope', 'project'),  // 'project' | 'all' (persisted)
   selectedId: null,
   view: loadPref('ui.view', 'list'),       // list | kanban | graph (persisted)
   search: '',
@@ -2655,6 +2674,7 @@ const Store = {
   composerTitle: '',             // staged new-task title (survives re-render)
   composerBody: '',
   composerBlocker: '',
+  composerProjectId: null,       // target project when creating from 'all' scope
   editingBody: null,             // null | string when editing body in detail panel
   editingTitle: null,
   newProjectOpen: false,
@@ -2893,6 +2913,10 @@ const API = {
     const r = await fetch('/api/projects/' + encodeURIComponent(projectId) + '/tasks');
     return await r.json();
   },
+  async listAllTasks() {
+    const r = await fetch('/api/tasks?all=1');
+    return await r.json();
+  },
   async createTask(projectId, payload) {
     const r = await fetch('/api/projects/' + encodeURIComponent(projectId) + '/tasks', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -2951,7 +2975,7 @@ function handleWSMessage(msg) {
       break;
     case 'task:created':
     case 'task:updated':
-      if (msg.data && msg.data.project_id === Store.activeProjectId) {
+      if (msg.data && taskInScope(msg.data)) {
         const now = Date.now();
         const isNew = !Store.tasks.some(t => t.id === msg.data.id);
         upsertTaskLocal(msg.data);
@@ -2974,7 +2998,7 @@ function handleWSMessage(msg) {
         let changed = false;
         const now = Date.now();
         for (const t of msg.data) {
-          if (t && t.project_id === Store.activeProjectId) {
+          if (t && taskInScope(t)) {
             upsertTaskLocal(t);
             Store.entering[t.id] = now;
             pushAgentLog('created ' + Util.shortId(t.id, 8) + ' ' + (t.title || '').slice(0, 40));
@@ -3005,6 +3029,23 @@ function handleWSMessage(msg) {
       loadProjects();
       break;
   }
+}
+
+function taskInScope(task) {
+  if (!task) return false;
+  if (Store.scope === 'all') return true;
+  return task.project_id === Store.activeProjectId;
+}
+
+function hasActiveScope() {
+  return Store.scope === 'all' || !!Store.activeProjectId;
+}
+
+function projectChipHTML(task) {
+  if (Store.scope !== 'all') return '';
+  const proj = Store.projects.find(p => p.id === task.project_id);
+  if (!proj) return '';
+  return '<span class="row-proj" title="' + Util.esc(proj.name) + '">' + Util.esc(proj.name) + '</span>';
 }
 
 function upsertTaskLocal(task) {
@@ -3062,11 +3103,19 @@ async function loadProjects() {
       savePref('project', Store.activeProjectId);
     }
     render();
-    if (Store.activeProjectId) await loadTasks();
+    if (Store.scope === 'all' || Store.activeProjectId) await loadTasks();
   } catch (e) { console.error('loadProjects', e); }
 }
 
 async function loadTasks() {
+  if (Store.scope === 'all') {
+    try {
+      Store.tasks = await API.listAllTasks();
+      Store.tasks.sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+      render();
+    } catch (e) { console.error('loadTasks', e); }
+    return;
+  }
   if (!Store.activeProjectId) { Store.tasks = []; render(); return; }
   try {
     Store.tasks = await API.listTasks(Store.activeProjectId);
@@ -3189,6 +3238,8 @@ const Actions = {
     Store.composerTitle = '';
     Store.composerBody = '';
     Store.composerBlocker = '';
+    Store.composerProjectId = Store.activeProjectId
+      || (Store.projects.length ? Store.projects[0].id : null);
     app.dataset.composerPri = '2';
     render({ focus: '.composer-title' });
   },
@@ -3197,7 +3248,11 @@ const Actions = {
     Store.composerTitle = '';
     Store.composerBody = '';
     Store.composerBlocker = '';
+    Store.composerProjectId = null;
     render();
+  },
+  setComposerProject(id) {
+    Store.composerProjectId = id;
   },
   openPalette() {
     Store.paletteOpen = true;
@@ -3255,6 +3310,12 @@ const Actions = {
   },
   switchProject(id) {
     Store.activeProjectId = id; savePref('project', id);
+    Store.scope = 'project'; savePref('ui.scope', 'project');
+    Store.selectedId = null; Store.tasks = [];
+    render(); loadTasks();
+  },
+  setScopeAll() {
+    Store.scope = 'all'; savePref('ui.scope', 'all');
     Store.selectedId = null; Store.tasks = [];
     render(); loadTasks();
   },
@@ -3270,15 +3331,19 @@ const Actions = {
     } catch (e) { console.error('createProject', e); }
   },
   async createTaskFromComposer(title, body, priority, blockedBy) {
-    if (!title || !title.trim() || !Store.activeProjectId) return;
+    if (!title || !title.trim()) return;
+    const targetProject = Store.scope === 'all'
+      ? (Store.composerProjectId || (Store.projects[0] && Store.projects[0].id))
+      : Store.activeProjectId;
+    if (!targetProject) return;
     try {
-      const created = await API.createTask(Store.activeProjectId, {
+      const created = await API.createTask(targetProject, {
         title: title.trim(), body: (body || '').trim(), priority: priority | 0,
       });
       // Create endpoint doesn't accept blocked_by; chain a PUT if needed.
       if (blockedBy && created && created.id) {
         await API.updateTask(created.id, {
-          project_id: Store.activeProjectId,
+          project_id: targetProject,
           title: created.title,
           body: created.body || '',
           status: created.status,
@@ -3288,6 +3353,7 @@ const Actions = {
       }
       Store.composerOpen = false;
       Store.composerBlocker = '';
+      Store.composerProjectId = null;
       render();
     } catch (e) { console.error('createTask', e); }
   },
@@ -3351,6 +3417,12 @@ function paletteItems() {
     if (v === Store.view) return;
     const labels = { list: 'List', kanban: 'Kanban', graph: 'Graph' };
     items.push({ type: 'view', label: 'Switch to ' + labels[v] + ' view', run: () => Actions.setView(v) });
+  });
+
+  items.push({
+    type: 'scope',
+    label: Store.scope === 'all' ? 'Show single project' : 'Show all projects (all tasks)',
+    run: () => Store.scope === 'all' ? Actions.switchProject(Store.activeProjectId) : Actions.setScopeAll(),
   });
 
   items.push({
@@ -3667,6 +3739,7 @@ function obsTopbar(T) {
 }
 
 function obsSidebar(T, counts, readyCount) {
+  const allActive = Store.scope === 'all';
   const projectsHtml = Store.projects.map(p => {
     const tasks = Store.tasks.filter(t => t.project_id === p.id);
     const c = Util.counts(tasks);
@@ -3675,7 +3748,8 @@ function obsSidebar(T, counts, readyCount) {
         const h = 4 + Math.min(c[s], 8);
         return '<span style="height:' + h + 'px;background:var(--seg-' + (s === 'in_progress' ? 'inprog' : s) + ')" title="' + c[s] + ' ' + s + '"></span>';
       }).join('');
-    return '<button class="project-item ' + (Store.activeProjectId === p.id ? 'active' : '') + '" data-act="project" data-id="' + Util.esc(p.id) + '">' +
+    const active = !allActive && Store.activeProjectId === p.id;
+    return '<button class="project-item ' + (active ? 'active' : '') + '" data-act="project" data-id="' + Util.esc(p.id) + '">' +
       '<span class="project-dot"></span>' +
       '<span class="project-name">' + Util.esc(p.name) + '</span>' +
       '<span class="project-count">' + tasks.length + '</span>' +
@@ -3683,9 +3757,13 @@ function obsSidebar(T, counts, readyCount) {
     '</button>';
   }).join('');
 
+  const allTasksTotal = allActive ? Store.tasks.length : '';
   return '<aside class="sidebar" aria-label="Sidebar">' +
     '<div>' +
       '<div class="side-label">Views</div>' +
+      '<button class="side-item ' + (allActive ? 'active' : '') + '" data-act="scope-all" aria-pressed="' + (allActive ? 'true' : 'false') + '">' +
+        '<span>All tasks</span><span class="count">' + allTasksTotal + '</span>' +
+      '</button>' +
       '<button class="side-item ' + (Store.filter === 'ready' ? 'ready-active' : '') + '" data-act="toggle-ready" aria-pressed="' + (Store.filter === 'ready' ? 'true' : 'false') + '">' +
         '<span>Ready queue</span><span class="pill">' + readyCount + '</span>' +
       '</button>' +
@@ -3714,6 +3792,7 @@ function obsComposer(T) {
     '<input class="composer-title" type="text" placeholder="Task title — press Enter to create" aria-label="Title" data-act="composer-submit" value="' + Util.esc(Store.composerTitle || '') + '">' +
     '<textarea class="composer-body" rows="2" placeholder="Description (optional)" aria-label="Description" data-act="composer-body">' + Util.esc(Store.composerBody || '') + '</textarea>' +
     '<div class="composer-row">' +
+      composerProjectSelector() +
       '<span class="label">Priority</span>' +
       [0, 1, 2, 3].map(p => {
         const on = p === stagedPri;
@@ -3726,6 +3805,18 @@ function obsComposer(T) {
   '</div>';
 }
 
+function composerProjectSelector() {
+  if (Store.scope !== 'all') return '';
+  const current = Store.composerProjectId
+    || (Store.projects[0] && Store.projects[0].id) || '';
+  const opts = Store.projects.map(p =>
+    '<option value="' + Util.esc(p.id) + '"' + (p.id === current ? ' selected' : '') + '>' +
+      Util.esc(p.name) +
+    '</option>').join('');
+  return '<span class="label">Project</span>' +
+    '<span class="seg-select-wrap"><select data-act="composer-project">' + opts + '</select></span>';
+}
+
 function obsMainView(T, tasks, byId) {
   if (Store.view === 'kanban') return obsKanbanView(T, tasks, byId);
   if (Store.view === 'graph') return obsGraphView(T, tasks, byId);
@@ -3733,7 +3824,7 @@ function obsMainView(T, tasks, byId) {
 }
 
 function obsKanbanView(T, tasks, byId) {
-  if (!Store.activeProjectId) {
+  if (!hasActiveScope()) {
     return '<div class="view-stub">' +
       '<div class="big">Kanban</div>' +
       '<div class="hint">select or create a project to get started.</div>' +
@@ -3802,7 +3893,7 @@ function obsKanbanCard(T, t, byId) {
 function obsGraphView(T, tasks, byId) {
   if (!tasks.length) {
     return '<div class="graph"><div class="empty">' +
-      (Store.activeProjectId
+      (hasActiveScope()
         ? 'No tasks' + (Store.search ? ' match \u201C' + Util.esc(Store.search) + '\u201D' : '') + '. Press <kbd>c</kbd> to create.'
         : 'Select or create a project to get started.') +
     '</div></div>';
@@ -3876,7 +3967,7 @@ function obsGraphView(T, tasks, byId) {
 function obsListView(T, tasks, byId) {
   if (!tasks.length) {
     return '<div class="list"><div class="empty">' +
-      (Store.activeProjectId ? 'No tasks' + (Store.search ? ' match “' + Util.esc(Store.search) + '”' : '') + '. Press <kbd>c</kbd> to create.'
+      (hasActiveScope() ? 'No tasks' + (Store.search ? ' match “' + Util.esc(Store.search) + '”' : '') + '. Press <kbd>c</kbd> to create.'
         : 'Select or create a project to get started.') +
     '</div></div>';
   }
@@ -3923,6 +4014,7 @@ function obsListRow(T, t, byId) {
 
   const priLabel = 'Priority P' + t.priority;
   const statusLabel = meta ? meta.label : t.status;
+  const projChip = projectChipHTML(t);
   return '<div class="' + classes.join(' ') + '" role="row" tabindex="0" aria-selected="' + (selected ? 'true' : 'false') + '" aria-label="' + Util.esc(statusLabel + ' · ' + t.title) + '" data-act="select" data-id="' + Util.esc(t.id) + '">' +
     '<span class="pri-bars p' + t.priority + '" role="gridcell" aria-label="' + priLabel + '">' + bars + '</span>' +
     '<span class="status-pill s-' + t.status + '" role="gridcell">' +
@@ -3933,6 +4025,7 @@ function obsListRow(T, t, byId) {
     '<span class="row-title-wrap" role="gridcell">' +
       '<span class="row-title">' + Util.esc(t.title) + '</span>' +
       (body1 ? '<span class="row-body">— ' + Util.esc(body1) + '</span>' : '') +
+      projChip +
     '</span>' +
     blockerChip +
     '<span class="row-time" role="gridcell">' + Util.esc(Util.relTime(t.updated_at)) + '</span>' +
@@ -3971,6 +4064,7 @@ function obsDetail(T, task, byId) {
       '</select></span>' +
       '<span>Blocked by</span>' +
       '<span class="blocker-cell">' + renderBlockerCombo('detail', task.blocked_by || '', task.id) + '</span>' +
+      (Store.scope === 'all' && proj ? '<span>Project</span><span class="val">' + Util.esc(proj.name) + '</span>' : '') +
       '<span>Updated</span>' +
       '<span class="val mono">' + Util.esc(Util.relTime(task.updated_at)) + '</span>' +
       '<span>Created</span>' +
@@ -4108,10 +4202,11 @@ function conStats(T, counts, readyCount) {
 }
 
 function conSidebar(T, readyCount) {
+  const allActive = Store.scope === 'all';
   const projectsHtml = Store.projects.map(p => {
     const ptasks = Store.tasks.filter(t => t.project_id === p.id);
     const c = Util.counts(ptasks);
-    const active = Store.activeProjectId === p.id;
+    const active = !allActive && Store.activeProjectId === p.id;
     return '<button class="project-item ' + (active ? 'active' : '') + '" data-act="project" data-id="' + Util.esc(p.id) + '">' +
       '<span class="arrow">' + (active ? '▸' : ' ') + '</span>' +
       '<span class="project-name">' + Util.esc(p.name) + '</span>' +
@@ -4132,8 +4227,12 @@ function conSidebar(T, readyCount) {
         '</div>';
       }).join('');
 
+  const allTasksTotal = allActive ? Store.tasks.length : '';
   return '<aside class="sidebar" aria-label="Sidebar">' +
     '<div class="side-label"><span>-- VIEWS --</span></div>' +
+    '<button class="side-item ' + (allActive ? 'active' : '') + '" data-act="scope-all" aria-pressed="' + (allActive ? 'true' : 'false') + '">' +
+      '<span>all tasks</span><span class="pill">' + allTasksTotal + '</span>' +
+    '</button>' +
     '<button class="side-item ' + (Store.filter === 'ready' ? 'ready-active' : '') + '" data-act="toggle-ready" aria-pressed="' + (Store.filter === 'ready' ? 'true' : 'false') + '">' +
       '<span>ready queue</span><span class="pill">' + readyCount + '</span>' +
     '</button>' +
@@ -4162,6 +4261,7 @@ function conComposer(T) {
     '</div>' +
     '<textarea class="composer-body" rows="2" placeholder="# description (optional)" aria-label="Description" data-act="composer-body">' + Util.esc(Store.composerBody || '') + '</textarea>' +
     '<div class="composer-row">' +
+      composerProjectSelector() +
       '<span class="label">pri</span>' +
       [0, 1, 2, 3].map(p => {
         const on = p === stagedPri;
@@ -4181,7 +4281,7 @@ function conMainView(T, tasks, byId) {
 }
 
 function conKanbanView(T, tasks, byId) {
-  if (!Store.activeProjectId) {
+  if (!hasActiveScope()) {
     return '<div class="view-stub">' +
       '<div class="big">KANBAN</div>' +
       '<div class="hint">// select or create a project to get started.</div>' +
@@ -4248,7 +4348,7 @@ function conKanbanCard(T, t, byId) {
 function conGraphView(T, tasks, byId) {
   if (!tasks.length) {
     return '<div class="graph"><div class="empty">' +
-      (Store.activeProjectId
+      (hasActiveScope()
         ? '$ no tasks' + (Store.search ? ' match \u201C' + Util.esc(Store.search) + '\u201D' : '') + '. press <kbd>c</kbd> to create.'
         : '$ select or create a project to get started.') +
     '</div></div>';
@@ -4318,7 +4418,7 @@ function conGraphView(T, tasks, byId) {
 function conListView(T, tasks, byId) {
   if (!tasks.length) {
     return '<div class="list"><div class="empty">' +
-      (Store.activeProjectId
+      (hasActiveScope()
         ? '$ no tasks' + (Store.search ? ' match “' + Util.esc(Store.search) + '”' : '') + '. press <kbd>c</kbd> to create.'
         : '$ select or create a project to get started.') +
     '</div></div>';
@@ -4362,6 +4462,7 @@ function conListRow(T, t, byId) {
     : '<span role="gridcell"></span>';
 
   const statusLabel = meta ? meta.label : t.status;
+  const projChip = projectChipHTML(t);
   return '<div class="' + classes.join(' ') + '" role="row" tabindex="0" aria-selected="' + (selected ? 'true' : 'false') + '" aria-label="' + Util.esc(statusLabel + ' · ' + t.title) + '" data-act="select" data-id="' + Util.esc(t.id) + '">' +
     '<span class="row-marker" role="gridcell" aria-hidden="true">' + (selected ? '▸' : ' ') + '</span>' +
     '<span class="pri-bang p' + t.priority + '" role="gridcell" aria-label="Priority P' + t.priority + '">' + bang + '</span>' +
@@ -4373,6 +4474,7 @@ function conListRow(T, t, byId) {
     '<span class="row-title-wrap" role="gridcell">' +
       '<span class="row-title">' + Util.esc(t.title) + '</span>' +
       (body1 ? '<span class="row-body">// ' + Util.esc(body1) + '</span>' : '') +
+      projChip +
     '</span>' +
     blockerChip +
     '<span class="row-time" role="gridcell">' + Util.esc(Util.relTime(t.updated_at)) + '</span>' +
@@ -4412,6 +4514,7 @@ function conDetail(T, task, byId) {
       '</select></span>' +
       '<span>blocked_by</span>' +
       '<span class="blocker-cell">' + renderBlockerCombo('detail', task.blocked_by || '', task.id) + '</span>' +
+      (Store.scope === 'all' && proj ? '<span>project</span><span class="val">' + Util.esc(proj.name) + '</span>' : '') +
       '<span>updated</span>' +
       '<span class="val mono">' + Util.esc(Util.relTime(task.updated_at)) + '</span>' +
       '<span>created</span>' +
@@ -4549,10 +4652,11 @@ function dosTopbar(T, counts, readyCount) {
 }
 
 function dosSidebar(T, readyCount) {
+  const allActive = Store.scope === 'all';
   const projectsHtml = Store.projects.map(p => {
     const ptasks = Store.tasks.filter(t => t.project_id === p.id);
     const c = Util.counts(ptasks);
-    const active = Store.activeProjectId === p.id;
+    const active = !allActive && Store.activeProjectId === p.id;
     const ornaments = [];
     if (c.in_progress) ornaments.push('<span class="c-inprog">\u25C8 ' + c.in_progress + '</span>');
     if (c.blocker)     ornaments.push('<span class="c-blocker">\u25C6 ' + c.blocker + '</span>');
@@ -4568,12 +4672,18 @@ function dosSidebar(T, readyCount) {
   }).join('');
 
   const readyActive = Store.filter === 'ready';
+  const allTasksTotal = allActive ? Store.tasks.length : 0;
   return '<aside class="sidebar" aria-label="Sidebar">' +
     '<div class="side-label">' +
       '<span>\u2014 Projects \u2014</span>' +
       '<button class="add-btn" data-act="new-project" title="New project" aria-label="New project">+</button>' +
     '</div>' +
     '<div>' + projectsHtml + '</div>' +
+    '<button class="ready-box all-tasks ' + (allActive ? 'active' : '') + '" data-act="scope-all" title="Aggregate every project" aria-pressed="' + (allActive ? 'true' : 'false') + '">' +
+      '<div class="label">ALL TASKS</div>' +
+      '<div class="num">' + (allActive ? allTasksTotal : '\u2014') + '</div>' +
+      '<div class="sub">aggregated across every project</div>' +
+    '</button>' +
     '<button class="ready-box ' + (readyActive ? 'active' : '') + '" data-act="toggle-ready" title="Toggle ready filter" aria-pressed="' + (readyActive ? 'true' : 'false') + '">' +
       '<div class="label">READY QUEUE</div>' +
       '<div class="num">' + readyCount + '</div>' +
@@ -4597,6 +4707,7 @@ function dosComposer(T) {
     '<input class="composer-title" type="text" placeholder="subject of the work\u2026" aria-label="Title" data-act="composer-submit" value="' + Util.esc(Store.composerTitle || '') + '">' +
     '<textarea class="composer-body" rows="2" placeholder="notes (optional)" aria-label="Description" data-act="composer-body">' + Util.esc(Store.composerBody || '') + '</textarea>' +
     '<div class="composer-row">' +
+      composerProjectSelector() +
       '<span class="label">Priority</span>' +
       [0, 1, 2, 3].map(p => {
         const on = p === stagedPri;
@@ -4616,7 +4727,7 @@ function dosMainView(T, tasks, byId) {
 }
 
 function dosKanbanView(T, tasks, byId) {
-  if (!Store.activeProjectId) {
+  if (!hasActiveScope()) {
     return '<div class="view-stub">' +
       '<div class="big">Board</div>' +
       '<div class="hint">\u2014 select or create a project to get started \u2014</div>' +
@@ -4680,7 +4791,7 @@ function dosKanbanCard(T, t, byId) {
 function dosGraphView(T, tasks, byId) {
   if (!tasks.length) {
     return '<div class="graph"><div class="empty">' +
-      (Store.activeProjectId
+      (hasActiveScope()
         ? '\u2014 No entries' + (Store.search ? ' matching \u201C' + Util.esc(Store.search) + '\u201D' : '') + '. Press c to compose. \u2014'
         : '\u2014 Select or create a project to get started. \u2014') +
     '</div></div>';
@@ -4751,7 +4862,7 @@ function dosGraphView(T, tasks, byId) {
 function dosListView(T, tasks, byId) {
   if (!tasks.length) {
     return '<div class="list"><div class="empty">' +
-      (Store.activeProjectId
+      (hasActiveScope()
         ? '\u2014 No entries' + (Store.search ? ' matching \u201C' + Util.esc(Store.search) + '\u201D' : '') + '. Press c to compose. \u2014'
         : '\u2014 Select or create a project to get started. \u2014') +
     '</div></div>';
@@ -4797,6 +4908,7 @@ function dosListRow(T, t, byId, idx) {
     : '<span role="gridcell"></span>';
 
   const statusLabel = meta ? meta.label.toUpperCase() : t.status.toUpperCase();
+  const projChip = projectChipHTML(t);
   return '<div class="' + classes.join(' ') + '" role="row" tabindex="0" aria-selected="' + (selected ? 'true' : 'false') + '" aria-label="' + Util.esc(statusLabel + ' \u00B7 ' + t.title) + '" data-act="select" data-id="' + Util.esc(t.id) + '">' +
     '<span class="row-num" role="gridcell">N\u00BA ' + String(idx + 1).padStart(2, '0') + '</span>' +
     '<span class="pri-roman p' + t.priority + '" role="gridcell" aria-label="' + priLabel + '">' + DOS_ROMAN[t.priority] + '</span>' +
@@ -4807,6 +4919,7 @@ function dosListRow(T, t, byId, idx) {
     '<div class="row-title-wrap" role="gridcell">' +
       '<div class="row-title">' + Util.esc(t.title) + '</div>' +
       (body1 ? '<div class="row-body">' + Util.esc(body1) + '</div>' : '') +
+      (projChip ? '<div class="row-proj-wrap">' + projChip + '</div>' : '') +
     '</div>' +
     blockerChip +
     '<span class="row-time" role="gridcell">' +
@@ -4861,6 +4974,7 @@ function dosDetail(T, task, byId) {
       '</select></span>' +
       '<span class="label">Held by</span>' +
       '<span class="blocker-cell">' + renderBlockerCombo('detail', task.blocked_by || '', task.id) + '</span>' +
+      (Store.scope === 'all' && proj ? '<span class="label">Project</span><span class="val">' + Util.esc(proj.name) + '</span>' : '') +
       '<span class="label">Updated</span>' +
       '<span class="val mono">' + Util.esc(Util.relTime(task.updated_at)) + '</span>' +
       '<span class="label">Opened</span>' +
@@ -5061,6 +5175,7 @@ app.addEventListener('click', async (e) => {
     case 'kanban-col': Actions.clearSelection(); return;
     case 'view': Actions.setView(el.dataset.view); return;
     case 'project': Actions.switchProject(id); return;
+    case 'scope-all': Actions.setScopeAll(); return;
     case 'toggle-ready': Actions.toggleReadyFilter(); return;
     case 'new-project': Actions.openNewProject(); return;
     case 'close-new-project': Actions.closeNewProject(); return;
@@ -5148,6 +5263,7 @@ app.addEventListener('change', async (e) => {
   if (!act) return;
   switch (act) {
     case 'theme': Actions.setTheme(el.value); return;
+    case 'composer-project': Actions.setComposerProject(el.value); return;
     case 'detail-status':
       if (Store.selectedId) await Actions.saveTaskEdit(Store.selectedId, { status: el.value });
       return;
