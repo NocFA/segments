@@ -14,7 +14,7 @@ Built as a faster, leaner alternative to Beads.
 
 ## Status
 
-**Segments is a work in progress.** The core is stable enough that I use it daily, but it has not had wide exposure yet, so builds and tagged releases are expected to ship with bugs. If you hit one, please [open an issue](https://git.nocfa.net/NocFA/segments/issues) with your OS, architecture, `sg version` output, and repro steps. Fast feedback is the quickest way to sand down the rough edges.
+**Segments is a work in progress.** The core is stable enough that I use it daily, but it has not had wide exposure yet, so builds and tagged releases are expected to ship with bugs. If you hit one, please [open an issue](https://git.nocfa.net/NocFA/segments/issues/new/choose) -- the template will prompt for OS, architecture, `sg version` output, and repro steps. Fast feedback is the quickest way to sand down the rough edges.
 
 ## Why
 

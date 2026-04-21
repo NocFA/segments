@@ -1,0 +1,87 @@
+name: Bug Report
+description: Something is broken or behaving unexpectedly.
+title: "bug: "
+labels: ["bug"]
+body:
+  - type: dropdown
+    id: os
+    attributes:
+      label: OS and architecture
+      options:
+        - macOS arm64
+        - Linux amd64
+        - Linux arm64
+        - Windows amd64
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install_method
+    attributes:
+      label: How did you install Segments?
+      options:
+        - Release binary (downloaded from releases page)
+        - Install script (install.sh)
+        - Built from source
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: sg version
+      description: Run `sg version` and paste the output.
+      placeholder: "segments v0.x.y-N-gabcdef"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Affected component
+      options:
+        - CLI
+        - Web UI
+        - MCP server
+        - Pi extension
+        - Other / unsure
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Run `sg ...`
+        2. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Paste output from `~/.segments/server.log` or terminal if applicable.
+      render: text
+
+  - type: textarea
+    id: screenshot
+    attributes:
+      label: Screenshot
+      description: Drag and drop an image here if it helps illustrate the issue.
