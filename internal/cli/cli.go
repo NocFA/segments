@@ -1631,6 +1631,7 @@ func doUninstall() error {
 	removeOpenCodeMCP(cwd)
 	removeMCPEntry(filepath.Join(cwd, ".mcp.json"))
 	removeClaudeHook(filepath.Join(cwd, ".claude", "settings.json"))
+	removeClaudeAllowlist(filepath.Join(cwd, ".claude", "settings.json"))
 	// Clean global integrations
 	os.Remove(filepath.Join(home, ".pi", "agent", "extensions", "segments.ts"))
 	if _, err := exec.LookPath("claude"); err == nil {
@@ -1639,6 +1640,7 @@ func doUninstall() error {
 	// Drop legacy ~/.claude/mcp.json entry written by older setup runs.
 	removeMCPEntry(filepath.Join(home, ".claude", "mcp.json"))
 	removeClaudeHook(filepath.Join(home, ".claude", "settings.json"))
+	removeClaudeAllowlist(filepath.Join(home, ".claude", "settings.json"))
 
 	cleanupSelf()
 
@@ -2253,10 +2255,11 @@ func buildIntegrations(s *store.Store, scope installScope, cwd, home, bin string
 			check: func() string {
 				hasMCP := mcpConfigured(mcpPath)
 				hasHook := claudeHookConfigured(settingsPath)
-				if hasMCP && hasHook {
+				hasAllow := claudeAllowlistConfigured(settingsPath)
+				if hasMCP && hasHook && hasAllow {
 					return "current"
 				}
-				if hasMCP || hasHook {
+				if hasMCP || hasHook || hasAllow {
 					return "outdated"
 				}
 				return "missing"
@@ -2265,10 +2268,13 @@ func buildIntegrations(s *store.Store, scope installScope, cwd, home, bin string
 				if err := writeClaudeCodeMCP(scope, mcpPath); err != nil {
 					return err
 				}
-				return writeClaudeHook(settingsPath)
+				if err := writeClaudeHook(settingsPath); err != nil {
+					return err
+				}
+				return writeClaudeAllowlist(settingsPath)
 			},
 			prompt: "Set up Claude Code integration?",
-			detail: fmt.Sprintf("Registers MCP server and adds session hook (%s)", settingsPath),
+			detail: fmt.Sprintf("Registers MCP server, adds session hook, and pre-approves segments tools (%s)", settingsPath),
 		})
 	}
 
@@ -2553,6 +2559,95 @@ func removeClaudeHook(settingsPath string) {
 	os.WriteFile(settingsPath, append(out, '\n'), 0644)
 }
 
+const claudeAllowlistEntry = "mcp__segments"
+
+func claudeAllowlistConfigured(settingsPath string) bool {
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		return false
+	}
+	var cfg map[string]interface{}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return false
+	}
+	perms, _ := cfg["permissions"].(map[string]interface{})
+	if perms == nil {
+		return false
+	}
+	allow, _ := perms["allow"].([]interface{})
+	for _, entry := range allow {
+		if s, _ := entry.(string); s == claudeAllowlistEntry {
+			return true
+		}
+	}
+	return false
+}
+
+func writeClaudeAllowlist(settingsPath string) error {
+	os.MkdirAll(filepath.Dir(settingsPath), 0755)
+
+	cfg := map[string]interface{}{}
+	if data, err := os.ReadFile(settingsPath); err == nil {
+		json.Unmarshal(data, &cfg)
+	}
+
+	perms, _ := cfg["permissions"].(map[string]interface{})
+	if perms == nil {
+		perms = map[string]interface{}{}
+	}
+	allow, _ := perms["allow"].([]interface{})
+
+	for _, entry := range allow {
+		if s, _ := entry.(string); s == claudeAllowlistEntry {
+			return nil
+		}
+	}
+	allow = append(allow, claudeAllowlistEntry)
+	perms["allow"] = allow
+	cfg["permissions"] = perms
+
+	out, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(settingsPath, append(out, '\n'), 0644)
+}
+
+func removeClaudeAllowlist(settingsPath string) {
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		return
+	}
+	var cfg map[string]interface{}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return
+	}
+	perms, _ := cfg["permissions"].(map[string]interface{})
+	if perms == nil {
+		return
+	}
+	allow, _ := perms["allow"].([]interface{})
+	var kept []interface{}
+	for _, entry := range allow {
+		if s, _ := entry.(string); s == claudeAllowlistEntry {
+			continue
+		}
+		kept = append(kept, entry)
+	}
+	if len(kept) == 0 {
+		delete(perms, "allow")
+	} else {
+		perms["allow"] = kept
+	}
+	if len(perms) == 0 {
+		delete(cfg, "permissions")
+	} else {
+		cfg["permissions"] = perms
+	}
+	out, _ := json.MarshalIndent(cfg, "", "  ")
+	os.WriteFile(settingsPath, append(out, '\n'), 0644)
+}
+
 func writeMCPConfig(path, bin string) error {
 	cfg := map[string]interface{}{}
 	if data, err := os.ReadFile(path); err == nil {
@@ -2682,6 +2777,10 @@ func fileExists(path string) bool {
 }
 
 const segmentsShortcutInstructions = `Segments is the persistent task tracker for this project. Tasks survive context wipes and outlive sessions; TodoWrite does not. Use Segments to plan multi-step work, scaffold upcoming tasks, track what is in progress, and capture follow-ups so they are not lost.
+
+Schema pre-load (Claude Code and any client that defers MCP tool schemas). If your tool list shows "mcp__segments__*" tools as deferred (schemas not yet loaded), issue this as your FIRST tool call of the session so the schemas are ready before you need them:
+  ToolSearch select:mcp__segments__segments_create_tasks,mcp__segments__segments_update_tasks,mcp__segments__segments_list_tasks,mcp__segments__segments_list_projects,mcp__segments__segments_update_task,mcp__segments__segments_create_task,mcp__segments__segments_get_task,mcp__segments__segments_delete_task,mcp__segments__segments_delete_tasks,mcp__segments__segments_create_project,mcp__segments__segments_rename_project
+Skip this if your client already lists the schemas inline (Pi, OpenCode, or Claude Code with ENABLE_TOOL_SEARCH=false or an "mcp__segments" allowlist entry). Do not pre-load every turn, only when schemas are actually deferred.
 
 When to use it (proactively, without being asked):
   Planning           Break a feature or refactor into steps BEFORE coding. Use segments_create_tasks to stub the whole queue in ONE call with priority + blocked_by on every entry.
@@ -2872,7 +2971,9 @@ Claim work by setting status=in_progress the moment you start a task -- this pre
 
 Priority is an integer 1/2/3 and is required when creating -- pick one based on user intent, never omit it. 1=URGENT ("drop everything", "broken build", "blocking prod", or actively blocking other ready work). 2=NORMAL ("let's do X" / regular session work; default when the intent is clearly now-or-next but not urgent). 3=BACKLOG ("sometime", "maybe later", "one idea is", future idea). 0 is unset (legacy only); do NOT pick 0 when creating.
 
-blocked_by is a correctness signal, not a hint. Set it whenever task A literally cannot start until task B lands: bootstrap blocks all downstream tasks, "Install X" blocks "Use X", "Add schema" blocks "Query schema", follow-ups discovered while working on X get blocked_by=X (discovered-from). In segments_create_tasks, "#0".."#N" references earlier batch entries. Creating a scaffolded batch without linking the obvious dependency chain is a correctness mistake, not a style choice.`
+blocked_by is a correctness signal, not a hint. Set it whenever task A literally cannot start until task B lands: bootstrap blocks all downstream tasks, "Install X" blocks "Use X", "Add schema" blocks "Query schema", follow-ups discovered while working on X get blocked_by=X (discovered-from). In segments_create_tasks, "#0".."#N" references earlier batch entries. Creating a scaffolded batch without linking the obvious dependency chain is a correctness mistake, not a style choice.
+
+If your client defers MCP tool schemas behind a ToolSearch / lazy-load mechanism (Claude Code does this by default), pre-load the segments schemas as your first tool call of the session: ToolSearch select:mcp__segments__segments_create_tasks,mcp__segments__segments_update_tasks,mcp__segments__segments_list_tasks,mcp__segments__segments_list_projects,mcp__segments__segments_update_task,mcp__segments__segments_create_task,mcp__segments__segments_get_task,mcp__segments__segments_delete_task,mcp__segments__segments_delete_tasks,mcp__segments__segments_create_project,mcp__segments__segments_rename_project. For a persistent fix, tell the user to add "mcp__segments" to permissions.allow in their Claude Code settings.json (via sg setup) or set ENABLE_TOOL_SEARCH=false; Segments is cross-session infrastructure and should not pay a schema round-trip on every new session.`
 
 func handleMCP(s *store.Store, req map[string]interface{}) map[string]interface{} {
 	method, _ := req["method"].(string)

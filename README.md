@@ -179,6 +179,31 @@ Run `sg setup` once to configure globally, or `sg init` inside a project directo
 
 The Claude Code integration exposes MCP tools for creating, updating, listing, and deleting tasks (including a bulk `segments_create_tasks` that understands `#0..#N` references for scaffolding dependency chains in one call) and a SessionStart hook that injects current project context into every new Claude session.
 
+### Claude Code: avoiding first-call friction
+
+Claude Code defers non-critical MCP tool schemas behind its `ToolSearch` lazy-loader. Because Segments is cross-session infrastructure (instructions ship with "use proactively, without being asked"), paying a schema round-trip on the first tool call of every session is exactly the wrong trade-off -- it's the moment the model is most likely to fall back to `TodoWrite` and silently lose cross-session continuity.
+
+`sg setup` handles this for you. On the Claude Code path it writes three things into the settings.json for the chosen scope (`~/.claude/settings.json` global, or `.claude/settings.json` local):
+
+1. The SessionStart hook (`segments context`) -- also emits a `ToolSearch select:mcp__segments__*` pre-load hint so Claude loads schemas on its first tool call.
+2. A `permissions.allow` entry for `mcp__segments` -- preauthorizes every Segments tool, so no permission prompts on first use.
+3. The MCP server registration (via `claude mcp add` for global, or `.mcp.json` for local).
+
+If you prefer to wire it up by hand, the equivalent `settings.json` snippet is:
+
+```json
+{
+  "permissions": { "allow": ["mcp__segments"] },
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [{ "type": "command", "command": "segments context" }] }
+    ]
+  }
+}
+```
+
+As a last resort you can set `ENABLE_TOOL_SEARCH=false` in Claude Code's environment to disable schema deferral globally, but that affects every MCP server on your machine; the allowlist approach is more surgical.
+
 ## Configuration
 
 Config lives at `~/.segments/config.yaml` (override the directory with `$SEGMENTS_DATA_DIR`):
