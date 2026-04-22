@@ -512,7 +512,9 @@ func ensureDaemon() (int, error) {
 	if err := cmd.Start(); err != nil {
 		return 0, err
 	}
-	return cmd.Process.Pid, nil
+	pid := cmd.Process.Pid
+	cmd.Process.Release()
+	return pid, nil
 }
 
 func runServe(s *store.Store) error {
@@ -598,13 +600,22 @@ func runServeDaemon(s *store.Store) error {
 }
 
 func runStop() error {
-	if !isRunning() {
+	pid := getPID()
+	if pid == 0 {
 		return fmt.Errorf("not running")
 	}
 
-	pid := getPID()
+	if !isProcessAlive(pid) {
+		os.Remove(pidFile)
+		fmt.Println()
+		fmt.Println(bold.Render("Segments stopped ") + dim.Render("(pid "+strconv.Itoa(pid)+" was stale, cleaned up)"))
+		fmt.Println()
+		return nil
+	}
+
 	if err := stopProcess(pid); err != nil {
-		return err
+		os.Remove(pidFile)
+		return fmt.Errorf("stop pid %d: %w (pid file cleaned up)", pid, err)
 	}
 
 	os.Remove(pidFile)
