@@ -23,7 +23,7 @@ jobs:
           response=$(curl -fsSL -X POST "${API}/repos/${REPO}/releases" \
             -H "Authorization: token ${TOKEN}" \
             -H "Content-Type: application/json" \
-            -d "{\"tag_name\":\"${TAG}\",\"name\":\"${TAG}\",\"draft\":false}")
+            -d "{\"tag_name\":\"${TAG}\",\"name\":\"${TAG}\",\"draft\":false,\"prerelease\":true}")
           release_id=$(echo "$response" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
           echo "release_id=${release_id}" >> "$GITHUB_OUTPUT"
 
