@@ -25,10 +25,11 @@ Got fed up with Beads. It's slow, it's heavy, and it leans on a Dolt DB infrastr
 - Projects and tasks with priorities, statuses, dependency chains, and rich-text bodies
 - Three interchangeable web themes (Obsidian, Console, Dossier) with light and dark modes
 - Three views: grouped **List**, drag-and-drop **Kanban**, and top-down dependency **Graph**
-- Ready-queue filter (tasks with no outstanding blockers)
-- Real-time updates over WebSocket: edits from one tab or the CLI show up live everywhere
-- Keyboard-first navigation: `j` `k` `c` `e` `/` `Esc` `Enter`
-- MCP server for Claude Code (auto-resolves the current project, bulk task creation with `#0..#N` cross-references)
+- Aggregated **All tasks** scope across every project, plus a ready-queue filter (tasks with no outstanding blockers)
+- Command palette (`Ctrl+K` / `Cmd+K`) and full keyboard-first navigation with `g`-chord view switching, priority hotkeys, and status cycling
+- Real-time updates over WebSocket: edits from one tab, the CLI, or an MCP agent show up live everywhere
+- `sg next` to pick the best unblocked task, `sg stats` for a progress/agents/activity dashboard, `sg export` for JSONL state snapshots
+- MCP server for Claude Code (auto-resolves the current project, bulk create / update / delete with `#0..#N` cross-references)
 - Pi extension, embedded in the binary, for task-aware AI sessions
 - OpenCode MCP integration
 - Auto-start service (opt-in: launchd, systemd, or Windows Task Scheduler)
@@ -49,7 +50,7 @@ Three themes, three views, same live data.
 </details>
 
 <details>
-<summary><strong>Dossier &middot; Kanban</strong> &mdash; editorial paper-and-ink, serif display, five-column board. <em>(click to expand)</em></summary>
+<summary><strong>Dossier &middot; Kanban</strong> &mdash; editorial paper-and-ink, serif display, four-column board. <em>(click to expand)</em></summary>
 
 ![Dossier theme, Kanban view](docs/screenshots/dossier-kanban.png)
 
@@ -107,21 +108,25 @@ Open <http://localhost:8765>.
 sg help
 
   Server
-    start         start the server    (serve)
+    start         start the server                                (serve)
     stop          stop the server
 
   Tasks
-    list          list projects and tasks    (status)
+    list          list projects and tasks                         (status)
+    next          pick the best next task to work on              (n)
+    stats         dashboard: progress, agents, recent activity    (st)
     view          view full task details
     add           create a task
     done          mark a task as done
     close         close a task
+    rm            delete a task                                   (delete)
     rename        rename a project
 
   Setup
-    setup         configure integrations    (install)
+    setup         configure integrations (required first)         (install)
     init          initialize a project in the current directory
     beads         import tasks from Beads
+    export        dump task state as JSONL for git-workflow snapshots
     remove        remove a project
     uninstall     remove segments and all data
 
@@ -133,6 +138,12 @@ sg help
 `sg list` auto-detects the current project from the working-directory name. Pass `-a` to include completed tasks. Passing a task-ID prefix to `list` falls through to `view`.
 
 `sg view <id>` prints the task's title, status, priority, blockers, timestamps, and body.
+
+`sg next` prints the single best unblocked task to pick up (highest priority, oldest wins), followed by the rest of the ready queue.
+
+`sg stats` renders a compact progress / agents / recent-activity dashboard rendered in the current theme.
+
+`sg export` streams task state as JSONL (one event per line) suitable for git-tracked snapshots or downstream pipelines. Configure a path in `config.yaml` to have every CLI / MCP mutation append automatically.
 
 ## Web UI
 
@@ -158,12 +169,20 @@ Switch views with the tabs in the top bar.
 
 Every tab connects over WebSocket and receives live deltas for task and project changes, whether those come from another tab, the CLI (`sg add`, `sg done`, `sg close`), or the MCP server. New tasks slide in; edits pulse briefly.
 
+### Command palette
+
+Press `Ctrl+K` (or `Cmd+K` on macOS) anywhere to open the command palette: fuzzy-jump between projects, views, and tasks in a single keystroke.
+
 ### Keyboard shortcuts
 
-- `j` / `k`: navigate tasks
+- `j` / `k` (or arrow keys): navigate tasks
+- `g l` / `g k` / `g g`: switch to List / Kanban / Graph view
 - `c`: compose a new task
 - `e`: edit the selected task's body
+- `t`: cycle the selected task's status
+- `1` / `2` / `3` / `4`: set the selected task's priority (4 clears it)
 - `/`: focus search
+- `Ctrl+K` / `Cmd+K`: toggle the command palette
 - `Esc`: close dialogs, combos, the detail panel, or blur inputs
 - `Enter`: open the selected task's detail panel
 
@@ -177,7 +196,7 @@ Every tab connects over WebSocket and receives live deltas for task and project 
 
 Run `sg setup` once to configure globally, or `sg init` inside a project directory for local config.
 
-The Claude Code integration exposes MCP tools for creating, updating, listing, and deleting tasks (including a bulk `segments_create_tasks` that understands `#0..#N` references for scaffolding dependency chains in one call) and a SessionStart hook that injects current project context into every new Claude session.
+The Claude Code integration exposes MCP tools for creating, updating, listing, and deleting tasks, with bulk variants (`segments_create_tasks`, `segments_update_tasks`, `segments_delete_tasks`) to scaffold or sweep whole queues in one round-trip. `segments_create_tasks` understands `#0..#N` back-references so dependency chains can be wired up inline. A SessionStart hook injects the current project context into every new Claude session, and `project_id` auto-resolves from the CWD so most calls can omit it.
 
 ### Claude Code: avoiding first-call friction
 
@@ -212,7 +231,16 @@ Config lives at `~/.segments/config.yaml` (override the directory with `$SEGMENT
 port: "8765"
 bind: "127.0.0.1"
 data_dir: "~/.segments"
+
+# jsonl_export:
+#   enabled: true
+#   path: ".segments/tasks.jsonl"
+#   scope: all            # all | project
+#   project_id: ""        # required when scope=project; UUID or prefix
+#   on_events: []         # subset of [created, updated, done, closed, deleted]; empty = all
 ```
+
+Uncomment `jsonl_export` to have every CLI / MCP mutation append to a JSONL file (handy as a git-tracked audit log alongside the code). `sg export` performs the same dump on demand.
 
 On Windows the default data directory is `%USERPROFILE%\.segments`.
 
@@ -220,9 +248,12 @@ On Windows the default data directory is `%USERPROFILE%\.segments`.
 
 ```bash
 make build       # build the binary
-make install     # build and install to ~/.local/bin
+make install     # build and install to ~/.local/bin (first-time)
+make reinstall   # stop daemon, back up data, rebuild, reinstall, restart (iterative dev)
 make stress      # build the bin/stress load generator
 ```
+
+`make install` is the minimal first-install path. For iterative development use `make reinstall` (or `scripts/dev-install.sh` / `scripts/dev-install.ps1`): it stops the running daemon, snapshots data to `~/.segments-backup-<ts>.jsonl`, overwrites every binary path the host shell might resolve (including the bare `sg` that Git Bash on Windows prefers over `sg.exe`), and can restart the daemon with `--start` / `-Start`.
 
 Tests:
 
