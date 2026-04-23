@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -122,8 +123,17 @@ func notifyServerEvent(typ string, data interface{}) {
 }
 
 func notifyServerEventFrom(source, typ string, data interface{}) {
+	notifyServerEventFromAgent(source, typ, data, nil)
+}
+
+// notifyServerEventFromAgent is notifyServerEventFrom with an explicit agent
+// override. Pass a non-nil agent when the caller knows the MCP client identity
+// for this request directly (e.g. the daemon's /internal/mcp handler forwarded
+// it from the originating shim). When agent is nil and source=="mcp", the
+// global mcpAgent set by handleMCP("initialize") is used as a fallback.
+func notifyServerEventFromAgent(source, typ string, data interface{}, agent *analytics.Agent) {
 	if typ != "" {
-		recordAnalyticsEvent(source, typ, data)
+		recordAnalyticsEventWithAgent(source, typ, data, agent)
 		if typ == "tasks:created" {
 			if batch, ok := data.([]*models.Task); ok {
 				exportWriter().EmitBatch("task:created", batch)
@@ -218,6 +228,10 @@ func eventTypeForUpdate(toStatus string) string {
 // event type for status transitions, and appends an analytics event tagged
 // with source (cli|mcp|web) and the current MCP agent when applicable.
 func recordAnalyticsEvent(source, typ string, data interface{}) {
+	recordAnalyticsEventWithAgent(source, typ, data, nil)
+}
+
+func recordAnalyticsEventWithAgent(source, typ string, data interface{}, agent *analytics.Agent) {
 	initAnalytics()
 
 	var projectID, taskID, toStatus string
@@ -236,7 +250,7 @@ func recordAnalyticsEvent(source, typ string, data interface{}) {
 	case []*models.Task:
 		for _, t := range v {
 			if t != nil {
-				recordAnalyticsEvent(source, "task:created", t)
+				recordAnalyticsEventWithAgent(source, "task:created", t, agent)
 			}
 		}
 		return
@@ -257,8 +271,7 @@ func recordAnalyticsEvent(source, typ string, data interface{}) {
 		recordType = eventTypeForUpdate(toStatus)
 	}
 
-	var agent *analytics.Agent
-	if source == "mcp" {
+	if agent == nil && source == "mcp" {
 		agent = getMCPAgent()
 	}
 
@@ -486,7 +499,7 @@ func Run(args []string, version string) error {
 		fmt.Println(version)
 		return nil
 	case "mcp":
-		return mcpServer(s)
+		return mcpServer()
 	case "context":
 		return runContext(s)
 	default:
@@ -592,6 +605,7 @@ func runServeDaemon(s *store.Store) error {
 	s = store.NewStore(dir)
 	hub := server.NewHub()
 	srv := server.NewServer(s, hub, cfg, pidFile)
+	srv.SetMCPHandler(mcpDaemonHandler(s))
 
 	if cfg.Extension != "" {
 		fmt.Printf("Extension: %s\n", cfg.Extension)
@@ -1071,7 +1085,7 @@ func runList(s *store.Store, args []string) error {
 // output. Looks back 30 days; nothing in window means no footer. projID
 // scopes to one project; empty string scans all projects (with project tag).
 func printRecentFooter(s *store.Store, projID string) {
-	entries, err := collectRecentEntries(s, projID)
+	entries, err := collectRecentEntries(s, localMCPContext(), projID)
 	if err != nil {
 		return
 	}
@@ -1334,7 +1348,7 @@ func runRecent(s *store.Store, args []string) error {
 		cutoff = c
 	}
 
-	entries, err := collectRecentEntries(s, projHint)
+	entries, err := collectRecentEntries(s, localMCPContext(), projHint)
 	if err != nil {
 		return err
 	}
@@ -1994,7 +2008,7 @@ func runAdd(s *store.Store, args []string) error {
 	if title == "" {
 		return fmt.Errorf("title required")
 	}
-	projectID, err := resolveProjectIDForMCP(s, hint)
+	projectID, err := resolveProjectIDForMCP(s, localMCPContext(), hint)
 	if err != nil {
 		return err
 	}
@@ -2118,7 +2132,7 @@ func resolveProjectAndTaskArgs(s *store.Store, args []string, cmd string) (strin
 		}
 		return proj.ID, task.ID, nil
 	case 2:
-		projectID, err := resolveProjectIDForMCP(s, args[0])
+		projectID, err := resolveProjectIDForMCP(s, localMCPContext(), args[0])
 		if err != nil {
 			return "", "", err
 		}
@@ -2249,7 +2263,7 @@ func runExport(s *store.Store, args []string) error {
 			path = filepath.Join(expandPath(dataDir), "tasks.jsonl")
 		}
 	} else {
-		pid, err := resolveProjectIDForMCP(s, hint)
+		pid, err := resolveProjectIDForMCP(s, localMCPContext(), hint)
 		if err != nil {
 			return err
 		}
@@ -3008,10 +3022,74 @@ func segmentsContextBlock(s *store.Store, projects []models.Project) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
-func mcpServer(s *store.Store) error {
+// mcpContext carries per-request state that the daemon-side MCP handler
+// needs but that the shim alone knows: the shim's working directory (for
+// CWD-basename project auto-resolution), the shim's SEGMENTS_PROJECT_ID
+// override (same resolution chain), and the MCP client identity parsed
+// from initialize.params.clientInfo so analytics attributes tool calls to
+// the right agent even when several shims share one daemon.
+type mcpContext struct {
+	CWD          string
+	ProjectIDEnv string
+	Agent        *analytics.Agent
+}
+
+// localMCPContext returns the mcpContext for in-process dispatch (CLI paths
+// and tests that run handleMCP directly). The daemon HTTP path builds its
+// own mcpContext from the forwarded headers instead.
+func localMCPContext() mcpContext {
+	cwd, _ := os.Getwd()
+	return mcpContext{CWD: cwd, ProjectIDEnv: os.Getenv("SEGMENTS_PROJECT_ID")}
+}
+
+// mcp request/response header names used by the shim<->daemon protocol.
+// Kept together so the shim and the server agree on the wire.
+const (
+	mcpHeaderCWD          = "X-Segments-Cwd"
+	mcpHeaderProjectID    = "X-Segments-Project-Id"
+	mcpHeaderAgentName    = "X-Segments-Agent-Name"
+	mcpHeaderAgentVersion = "X-Segments-Agent-Version"
+)
+
+// mcpDaemonHandler is wired into the server in runServeDaemon and invoked
+// for each POST /internal/mcp request. It builds an mcpContext from the
+// forwarded headers and dispatches to handleMCP.
+func mcpDaemonHandler(s *store.Store) server.MCPHandler {
+	return func(req map[string]interface{}, headers http.Header) map[string]interface{} {
+		mc := mcpContext{
+			CWD:          headers.Get(mcpHeaderCWD),
+			ProjectIDEnv: headers.Get(mcpHeaderProjectID),
+		}
+		if name := headers.Get(mcpHeaderAgentName); name != "" {
+			mc.Agent = &analytics.Agent{
+				Name:    name,
+				Version: headers.Get(mcpHeaderAgentVersion),
+			}
+		}
+		return handleMCP(s, mc, req)
+	}
+}
+
+// mcpServer is the stdio<->HTTP forwarder invoked by `segments mcp`. Each
+// client (Claude Code, Pi, OpenCode) still spawns its own child process
+// because MCP stdio transport is 1:1 with the client, but the child no
+// longer opens LMDB: it decodes JSON-RPC from stdin, POSTs each request
+// to the daemon's /internal/mcp endpoint (auto-starting the daemon if
+// needed), and writes the response back to stdout byte-for-byte. The
+// client's CWD, $SEGMENTS_PROJECT_ID, and clientInfo travel as headers so
+// the daemon sees the same resolution inputs the old in-process handler
+// would have seen.
+func mcpServer() error {
 	if _, err := ensureDaemon(); err != nil {
 		fmt.Fprintf(os.Stderr, "segments: auto-start server failed: %v\n", err)
 	}
+	waitForDaemonReady(2 * time.Second)
+
+	cwd, _ := os.Getwd()
+	projectIDEnv := os.Getenv("SEGMENTS_PROJECT_ID")
+	var agentName, agentVersion string
+
+	client := &http.Client{Timeout: 30 * time.Second}
 
 	dec := json.NewDecoder(os.Stdin)
 	enc := json.NewEncoder(os.Stdout)
@@ -3024,15 +3102,136 @@ func mcpServer(s *store.Store) error {
 			}
 			return err
 		}
-		// JSON-RPC 2.0: messages without an id are notifications and MUST NOT
-		// receive a response. Claude Code sends notifications/initialized after
-		// initialize; replying to it (even with an error) is a protocol violation
-		// that can prevent the client from registering our tools.
-		if _, hasID := req["id"]; !hasID {
+
+		// Capture the client's identity from the first initialize so every
+		// subsequent request can forward it, keeping analytics attribution
+		// stable even when the daemon is serving several shims at once.
+		if method, _ := req["method"].(string); method == "initialize" {
+			if params, ok := req["params"].(map[string]interface{}); ok {
+				if ci, ok := params["clientInfo"].(map[string]interface{}); ok {
+					agentName, _ = ci["name"].(string)
+					agentVersion, _ = ci["version"].(string)
+				}
+			}
+		}
+
+		_, hasID := req["id"]
+		if !hasID {
+			// JSON-RPC 2.0 notifications MUST NOT receive a response.
+			// Fire and forget; ignore errors so a daemon hiccup does not
+			// cascade into a client-visible failure on a notification.
+			go forwardMCP(client, req, cwd, projectIDEnv, agentName, agentVersion)
 			continue
 		}
-		enc.Encode(handleMCP(s, req))
+
+		resp, err := forwardMCPWithRetry(client, req, cwd, projectIDEnv, agentName, agentVersion)
+		if err != nil {
+			resp = map[string]interface{}{
+				"jsonrpc": "2.0",
+				"id":      req["id"],
+				"error": map[string]interface{}{
+					"code":    -32603,
+					"message": fmt.Sprintf("segments daemon unavailable: %v", err),
+				},
+			}
+		}
+		enc.Encode(resp)
 	}
+}
+
+// waitForDaemonReady polls until the daemon's pid file has a host:port
+// entry and that port accepts a TCP connection, or deadline expires.
+// ensureDaemon returns as soon as the child process is spawned, which is
+// before it binds its listener; without this wait the very first
+// forwardMCP can race the listener and trigger a superfluous retry.
+func waitForDaemonReady(deadline time.Duration) {
+	end := time.Now().Add(deadline)
+	for time.Now().Before(end) {
+		if _, addr, err := pidFileData(); err == nil && addr != "" {
+			if !strings.Contains(addr, ":") {
+				addr = "127.0.0.1:" + addr
+			}
+			conn, err := net.DialTimeout("tcp", addr, 100*time.Millisecond)
+			if err == nil {
+				conn.Close()
+				return
+			}
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+}
+
+// forwardMCP POSTs a single JSON-RPC request to the daemon and returns the
+// decoded response. A nil response with nil error means the daemon replied
+// 204 No Content (notification path) and the caller should not write to
+// stdout.
+func forwardMCP(client *http.Client, req map[string]interface{}, cwd, projectIDEnv, agentName, agentVersion string) (map[string]interface{}, error) {
+	pid, addr, err := pidFileData()
+	if err != nil {
+		return nil, err
+	}
+	if p, err := os.FindProcess(pid); err != nil || p.Pid != pid {
+		return nil, fmt.Errorf("daemon pid %d not alive", pid)
+	}
+	if !strings.Contains(addr, ":") {
+		addr = "127.0.0.1:" + addr
+	}
+
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, err
+	}
+	httpReq, err := http.NewRequest("POST", "http://"+addr+"/internal/mcp", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set(mcpHeaderCWD, cwd)
+	if projectIDEnv != "" {
+		httpReq.Header.Set(mcpHeaderProjectID, projectIDEnv)
+	}
+	if agentName != "" {
+		httpReq.Header.Set(mcpHeaderAgentName, agentName)
+		httpReq.Header.Set(mcpHeaderAgentVersion, agentVersion)
+	}
+
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNoContent {
+		return nil, nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("daemon returned %s", resp.Status)
+	}
+	var out map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// forwardMCPWithRetry wraps forwardMCP with one daemon-restart retry so a
+// transient crash or `sg stop` between requests doesn't wedge the client's
+// session. If the retry still fails the caller turns the error into a
+// JSON-RPC -32603 response.
+func forwardMCPWithRetry(client *http.Client, req map[string]interface{}, cwd, projectIDEnv, agentName, agentVersion string) (map[string]interface{}, error) {
+	resp, err := forwardMCP(client, req, cwd, projectIDEnv, agentName, agentVersion)
+	if err == nil {
+		return resp, nil
+	}
+	if _, restartErr := ensureDaemon(); restartErr != nil {
+		return nil, fmt.Errorf("%v; restart failed: %v", err, restartErr)
+	}
+	for i := 0; i < 20; i++ {
+		if isRunning() {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return forwardMCP(client, req, cwd, projectIDEnv, agentName, agentVersion)
 }
 
 // supportedMCPProtocolVersions lists every protocol version this server speaks,
@@ -3107,7 +3306,7 @@ Schema deferral: Claude Code and other clients that use ToolSearch defer MCP too
   ToolSearch select:mcp__segments__segments_create_tasks,mcp__segments__segments_update_tasks,mcp__segments__segments_list_tasks,mcp__segments__segments_list_projects,mcp__segments__segments_update_task,mcp__segments__segments_create_task,mcp__segments__segments_get_task,mcp__segments__segments_delete_task,mcp__segments__segments_delete_tasks,mcp__segments__segments_create_project,mcp__segments__segments_rename_project,mcp__segments__segments_recent
 For a persistent fix, set ENABLE_TOOL_SEARCH=false in Claude Code's environment -- that disables schema deferral globally. A "mcp__segments" entry in permissions.allow (written by sg setup) pre-authorizes every Segments tool so no permission prompts fire, but it does NOT flip schema loading; only ENABLE_TOOL_SEARCH does.`
 
-func handleMCP(s *store.Store, req map[string]interface{}) map[string]interface{} {
+func handleMCP(s *store.Store, mc mcpContext, req map[string]interface{}) map[string]interface{} {
 	method, _ := req["method"].(string)
 	id := req["id"]
 
@@ -3142,7 +3341,7 @@ func handleMCP(s *store.Store, req map[string]interface{}) map[string]interface{
 		tool, _ := params["name"].(string)
 		args, _ := params["arguments"].(map[string]interface{})
 		resp["result"] = map[string]interface{}{
-			"content": []map[string]string{{"type": "text", "text": callTool(s, tool, args)}},
+			"content": []map[string]string{{"type": "text", "text": callTool(s, mc, tool, args)}},
 		}
 	case "prompts/list":
 		resp["result"] = map[string]interface{}{"prompts": []interface{}{}}
@@ -3275,8 +3474,10 @@ func mcpToolDefs() []map[string]interface{} {
 // resolveProjectIDForMCP picks a project for MCP tool calls. Order: explicit
 // hint (UUID prefix or name) -> $SEGMENTS_PROJECT_ID -> CWD basename match ->
 // single-project fallback. Returns an error with available project names when
-// resolution is ambiguous so the agent can correct itself.
-func resolveProjectIDForMCP(s *store.Store, hint string) (string, error) {
+// resolution is ambiguous so the agent can correct itself. CWD and the env
+// override are read from mc so the daemon-side handler honors the originating
+// shim's environment rather than its own.
+func resolveProjectIDForMCP(s *store.Store, mc mcpContext, hint string) (string, error) {
 	projects, err := s.ListProjects()
 	if err != nil {
 		return "", err
@@ -3290,13 +3491,21 @@ func resolveProjectIDForMCP(s *store.Store, hint string) (string, error) {
 		}
 		return "", fmt.Errorf("no project matches %q", hint)
 	}
-	if env := os.Getenv("SEGMENTS_PROJECT_ID"); env != "" {
-		if p := resolveProject(projects, env); p != nil {
+	if mc.ProjectIDEnv != "" {
+		if p := resolveProject(projects, mc.ProjectIDEnv); p != nil {
 			return p.ID, nil
 		}
 	}
-	if p := resolveProject(projects, ""); p != nil {
-		return p.ID, nil
+	if len(projects) == 1 {
+		return projects[0].ID, nil
+	}
+	if mc.CWD != "" {
+		dirName := filepath.Base(mc.CWD)
+		for i := range projects {
+			if strings.EqualFold(projects[i].Name, dirName) {
+				return projects[i].ID, nil
+			}
+		}
 	}
 	names := make([]string, len(projects))
 	for i, p := range projects {
@@ -3772,13 +3981,13 @@ func renderRecentTasks(entries []recentEntry, args map[string]interface{}) strin
 // collectRecentEntries pulls tasks from one or all projects, tagging each with
 // its project name so renderRecentTasks can disambiguate. If hint is empty,
 // iterates every project; otherwise resolves the hint to a single project.
-func collectRecentEntries(s *store.Store, hint string) ([]recentEntry, error) {
+func collectRecentEntries(s *store.Store, mc mcpContext, hint string) ([]recentEntry, error) {
 	projects, err := s.ListProjects()
 	if err != nil {
 		return nil, err
 	}
 	if hint != "" {
-		pid, err := resolveProjectIDForMCP(s, hint)
+		pid, err := resolveProjectIDForMCP(s, mc, hint)
 		if err != nil {
 			return nil, err
 		}
@@ -3815,7 +4024,7 @@ func collectRecentEntries(s *store.Store, hint string) ([]recentEntry, error) {
 	return out, nil
 }
 
-func callTool(s *store.Store, tool string, args map[string]interface{}) string {
+func callTool(s *store.Store, mc mcpContext, tool string, args map[string]interface{}) string {
 	str := func(key string) string { v, _ := args[key].(string); return v }
 	marshal := func(v interface{}) string { d, _ := json.Marshal(v); return string(d) }
 	errMsg := func(err error) string { return marshal(map[string]string{"error": err.Error()}) }
@@ -3826,7 +4035,9 @@ func callTool(s *store.Store, tool string, args map[string]interface{}) string {
 		}
 		return coerceInt(v, def)
 	}
-	notify := func(typ string, data interface{}) { notifyServerEventFrom("mcp", typ, data) }
+	notify := func(typ string, data interface{}) {
+		notifyServerEventFromAgent("mcp", typ, data, mc.Agent)
+	}
 
 	switch tool {
 	case "segments_list_projects":
@@ -3847,7 +4058,7 @@ func callTool(s *store.Store, tool string, args map[string]interface{}) string {
 		notify("project:updated", p)
 		return marshal(p)
 	case "segments_list_tasks":
-		pid, err := resolveProjectIDForMCP(s, str("project_id"))
+		pid, err := resolveProjectIDForMCP(s, mc, str("project_id"))
 		if err != nil {
 			return errMsg(err)
 		}
@@ -3857,7 +4068,7 @@ func callTool(s *store.Store, tool string, args map[string]interface{}) string {
 		}
 		return renderListTasks(list, args)
 	case "segments_create_task":
-		pid, err := resolveProjectIDForMCP(s, str("project_id"))
+		pid, err := resolveProjectIDForMCP(s, mc, str("project_id"))
 		if err != nil {
 			return errMsg(err)
 		}
@@ -3874,7 +4085,7 @@ func callTool(s *store.Store, tool string, args map[string]interface{}) string {
 		notify("task:created", t)
 		return marshal(t)
 	case "segments_create_tasks":
-		pid, err := resolveProjectIDForMCP(s, str("project_id"))
+		pid, err := resolveProjectIDForMCP(s, mc, str("project_id"))
 		if err != nil {
 			return errMsg(err)
 		}
@@ -4057,7 +4268,7 @@ func callTool(s *store.Store, tool string, args map[string]interface{}) string {
 		}
 		return marshalTaskWithResolve(ref)
 	case "segments_recent":
-		entries, err := collectRecentEntries(s, str("project_id"))
+		entries, err := collectRecentEntries(s, mc, str("project_id"))
 		if err != nil {
 			return errMsg(err)
 		}

@@ -38,16 +38,24 @@ type Config struct {
 	Version            string `yaml:"-" json:"version,omitempty"`
 }
 
+// MCPHandler processes a single JSON-RPC request that the stdio shim
+// forwarded to the daemon. Headers carry the shim's CWD, SEGMENTS_PROJECT_ID
+// override, and MCP client identity so the handler can reproduce the
+// resolution the old in-process handler would have made. A nil return means
+// the request was a notification and the HTTP response should be 204.
+type MCPHandler func(req map[string]interface{}, headers http.Header) map[string]interface{}
+
 type Server struct {
-	store    *store.Store
-	hub      *Hub
-	addr     string
-	bind     string
-	pidFile  string
-	mux      *http.ServeMux
-	http     *http.Server
-	config   *Config
-	exporter *export.Writer
+	store       *store.Store
+	hub         *Hub
+	addr        string
+	bind        string
+	pidFile     string
+	mux         *http.ServeMux
+	http        *http.Server
+	config      *Config
+	exporter    *export.Writer
+	mcpHandler  MCPHandler
 }
 
 func NewServer(store *store.Store, hub *Hub, cfg *Config, pidFile string) *Server {
@@ -67,6 +75,15 @@ func NewServer(store *store.Store, hub *Hub, cfg *Config, pidFile string) *Serve
 
 func (s *Server) Exporter() *export.Writer {
 	return s.exporter
+}
+
+// SetMCPHandler wires the daemon-side MCP dispatcher. It is called from
+// the CLI package during runServeDaemon so the handler (which lives in
+// internal/cli to avoid duplicating the tool dispatch table) can be
+// reached from the POST /internal/mcp route without creating an import
+// cycle between server and cli.
+func (s *Server) SetMCPHandler(h MCPHandler) {
+	s.mcpHandler = h
 }
 
 func (s *Server) emit(typ string, data interface{}) {
@@ -139,6 +156,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("PUT /api/tasks/{id}", s.handleUpdateTask)
 	s.mux.HandleFunc("DELETE /api/tasks/{id}", s.handleDeleteTask)
 	s.mux.HandleFunc("POST /internal/sync", s.handleSync)
+	s.mux.HandleFunc("POST /internal/mcp", s.handleMCP)
 	s.mux.HandleFunc("GET /internal/config", s.handleConfig)
 	s.mux.HandleFunc("GET /internal/extension", s.handleExtension)
 }
@@ -445,6 +463,31 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 		s.hub.Broadcast(msg)
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleMCP forwards a JSON-RPC request from a `segments mcp` stdio shim
+// to the registered MCPHandler. Notifications (no id in the request) are
+// acknowledged with 204 and produce no response body. Requests with an id
+// return the handler's response as JSON; a nil handler response also maps
+// to 204 so the shim stays silent on stdout, matching the legacy in-process
+// behavior.
+func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
+	if s.mcpHandler == nil {
+		s.writeError(w, "mcp handler not registered", http.StatusServiceUnavailable)
+		return
+	}
+	var req map[string]interface{}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.writeError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	_, hasID := req["id"]
+	resp := s.mcpHandler(req, r.Header)
+	if !hasID || resp == nil {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	s.writeJSON(w, resp)
 }
 
 func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {

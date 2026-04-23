@@ -142,7 +142,7 @@ func TestMCP_AgentCaptureInEvents(t *testing.T) {
 			},
 		},
 	}
-	if resp := handleMCP(st, initReq); resp["error"] != nil {
+	if resp := handleMCP(st, mcpContext{}, initReq); resp["error"] != nil {
 		t.Fatalf("initialize error: %+v", resp)
 	}
 
@@ -159,7 +159,7 @@ func TestMCP_AgentCaptureInEvents(t *testing.T) {
 			},
 		},
 	}
-	handleMCP(st, callReq)
+	handleMCP(st, mcpContext{}, callReq)
 
 	events, err := analytics.Read(eventPath)
 	if err != nil {
@@ -770,7 +770,7 @@ func TestMCP_GetTaskCrossProject(t *testing.T) {
 	// Caller passes alpha as hint but the task lives in beta. With the fix,
 	// get_task still finds it and surfaces resolved_from_project_id.
 	args := map[string]interface{}{"project_id": p1.ID, "task_id": task.ID}
-	out := callTool(st, "segments_get_task", args)
+	out := callTool(st, mcpContext{}, "segments_get_task", args)
 	if strings.Contains(out, "MDB_NOTFOUND") {
 		t.Fatalf("LMDB error leaked: %s", out)
 	}
@@ -788,7 +788,7 @@ func TestMCP_GetTaskCrossProject(t *testing.T) {
 	// Same call without project_id should also work (scan-all path), and must
 	// NOT include resolved_from_project_id (no hint was given to override).
 	args = map[string]interface{}{"task_id": task.ID}
-	out = callTool(st, "segments_get_task", args)
+	out = callTool(st, mcpContext{}, "segments_get_task", args)
 	var parsed2 map[string]interface{}
 	if jerr := json.Unmarshal([]byte(out), &parsed2); jerr != nil {
 		t.Fatalf("json parse: %v; raw: %s", jerr, out)
@@ -819,7 +819,7 @@ func TestMCP_UpdateTaskCrossProject(t *testing.T) {
 		"task_id":    task.ID,
 		"status":     "in_progress",
 	}
-	out := callTool(st, "segments_update_task", args)
+	out := callTool(st, mcpContext{}, "segments_update_task", args)
 	if strings.Contains(out, "MDB_NOTFOUND") {
 		t.Fatalf("LMDB error leaked: %s", out)
 	}
@@ -854,7 +854,7 @@ func TestMCP_DeleteTaskCrossProject(t *testing.T) {
 	task, _ := st.CreateTask(p2.ID, "to delete", "", 2)
 
 	args := map[string]interface{}{"project_id": p1.ID, "task_id": task.ID}
-	out := callTool(st, "segments_delete_task", args)
+	out := callTool(st, mcpContext{}, "segments_delete_task", args)
 	if !strings.Contains(out, `"deleted":true`) {
 		t.Fatalf("unexpected delete response: %s", out)
 	}
@@ -877,7 +877,7 @@ func TestMCP_GetTaskMissingTask_WrappedError(t *testing.T) {
 	st := store.NewStore(dir)
 	st.CreateProject("alpha")
 
-	out := callTool(st, "segments_get_task", map[string]interface{}{"task_id": "nonexistent"})
+	out := callTool(st, mcpContext{}, "segments_get_task", map[string]interface{}{"task_id": "nonexistent"})
 	if strings.Contains(out, "MDB_NOTFOUND") || strings.Contains(out, "mdb_get") {
 		t.Errorf("raw LMDB error leaked: %s", out)
 	}
@@ -960,7 +960,7 @@ func TestMCPListTasks_CompactStripsBody(t *testing.T) {
 	p, _ := st.CreateProject("alpha")
 	st.CreateTask(p.ID, "t1", "BODY-CONTENT-MARKER", 2)
 
-	out := callTool(st, "segments_list_tasks", map[string]interface{}{"project_id": p.ID})
+	out := callTool(st, mcpContext{}, "segments_list_tasks", map[string]interface{}{"project_id": p.ID})
 	if strings.Contains(out, "BODY-CONTENT-MARKER") {
 		t.Errorf("compact default leaked body: %s", out)
 	}
@@ -990,7 +990,7 @@ func TestMCPListTasks_FieldsFullKeepsBody(t *testing.T) {
 	p, _ := st.CreateProject("alpha")
 	st.CreateTask(p.ID, "t1", "BODY-CONTENT-MARKER", 2)
 
-	out := callTool(st, "segments_list_tasks", map[string]interface{}{
+	out := callTool(st, mcpContext{}, "segments_list_tasks", map[string]interface{}{
 		"project_id": p.ID,
 		"fields":     "full",
 	})
@@ -1010,7 +1010,7 @@ func TestMCPListTasks_LimitCaps(t *testing.T) {
 		st.CreateTask(p.ID, "t", "", 2)
 	}
 
-	out := callTool(st, "segments_list_tasks", map[string]interface{}{
+	out := callTool(st, mcpContext{}, "segments_list_tasks", map[string]interface{}{
 		"project_id": p.ID,
 		"limit":      float64(2),
 	})
@@ -1034,7 +1034,7 @@ func TestMCPListTasks_SinceFiltersByUpdatedAt(t *testing.T) {
 	time.Sleep(120 * time.Millisecond)
 	fresh, _ := st.CreateTask(p.ID, "fresh", "", 2)
 
-	out := callTool(st, "segments_list_tasks", map[string]interface{}{
+	out := callTool(st, mcpContext{}, "segments_list_tasks", map[string]interface{}{
 		"project_id": p.ID,
 		"since":      "100ms",
 	})
@@ -1069,7 +1069,7 @@ func TestMCPListTasks_OrderByClosedAtDesc(t *testing.T) {
 	st.UpdateTask(p.ID, b.ID, "", "", models.StatusDone, -1, "")
 
 	// status=done should auto-pick closed_at_desc when order_by unset.
-	out := callTool(st, "segments_list_tasks", map[string]interface{}{
+	out := callTool(st, mcpContext{}, "segments_list_tasks", map[string]interface{}{
 		"project_id": p.ID,
 		"status":     "done",
 	})
@@ -1101,7 +1101,7 @@ func TestMCPListTasks_TruncationWrapsResponse(t *testing.T) {
 		st.CreateTask(p.ID, "t", big, 2)
 	}
 
-	out := callTool(st, "segments_list_tasks", map[string]interface{}{
+	out := callTool(st, mcpContext{}, "segments_list_tasks", map[string]interface{}{
 		"project_id": p.ID,
 		"fields":     "full",
 		"limit":      float64(1000),
@@ -1165,7 +1165,7 @@ func TestMCPRecent_OrdersByClosedAtDesc(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 	st.UpdateTask(p.ID, b.ID, "", "", models.StatusClosed, -1, "")
 
-	out := callTool(st, "segments_recent", map[string]interface{}{"project_id": p.ID})
+	out := callTool(st, mcpContext{}, "segments_recent", map[string]interface{}{"project_id": p.ID})
 	var got []map[string]interface{}
 	if err := json.Unmarshal([]byte(out), &got); err != nil {
 		t.Fatalf("expected bare array, got error %v: %s", err, out)
@@ -1207,7 +1207,7 @@ func TestMCPRecent_LimitDefaultAndOverride(t *testing.T) {
 		st.UpdateTask(p.ID, tk.ID, "", "", models.StatusDone, -1, "")
 	}
 
-	out := callTool(st, "segments_recent", map[string]interface{}{"project_id": p.ID})
+	out := callTool(st, mcpContext{}, "segments_recent", map[string]interface{}{"project_id": p.ID})
 	var got []map[string]interface{}
 	if err := json.Unmarshal([]byte(out), &got); err != nil {
 		t.Fatalf("parse default: %v, raw: %s", err, out)
@@ -1216,7 +1216,7 @@ func TestMCPRecent_LimitDefaultAndOverride(t *testing.T) {
 		t.Errorf("default limit: got %d rows, want 10", len(got))
 	}
 
-	out = callTool(st, "segments_recent", map[string]interface{}{
+	out = callTool(st, mcpContext{}, "segments_recent", map[string]interface{}{
 		"project_id": p.ID,
 		"limit":      float64(3),
 	})
@@ -1241,7 +1241,7 @@ func TestMCPRecent_SinceExcludesOld(t *testing.T) {
 	fresh, _ := st.CreateTask(p.ID, "fresh", "", 2)
 	st.UpdateTask(p.ID, fresh.ID, "", "", models.StatusDone, -1, "")
 
-	out := callTool(st, "segments_recent", map[string]interface{}{
+	out := callTool(st, mcpContext{}, "segments_recent", map[string]interface{}{
 		"project_id": p.ID,
 		"since":      "100ms",
 	})
@@ -1270,7 +1270,7 @@ func TestMCPRecent_SkipsOpenTasks(t *testing.T) {
 	done, _ := st.CreateTask(p.ID, "done-one", "", 2)
 	st.UpdateTask(p.ID, done.ID, "", "", models.StatusDone, -1, "")
 
-	out := callTool(st, "segments_recent", map[string]interface{}{"project_id": p.ID})
+	out := callTool(st, mcpContext{}, "segments_recent", map[string]interface{}{"project_id": p.ID})
 	var got []map[string]interface{}
 	if err := json.Unmarshal([]byte(out), &got); err != nil {
 		t.Fatalf("parse: %v, raw: %s", err, out)
@@ -1297,7 +1297,7 @@ func TestMCPRecent_CombinesAcrossProjectsWhenIDOmitted(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 	st.UpdateTask(pb.ID, tb.ID, "", "", models.StatusDone, -1, "")
 
-	out := callTool(st, "segments_recent", map[string]interface{}{})
+	out := callTool(st, mcpContext{}, "segments_recent", map[string]interface{}{})
 	var got []map[string]interface{}
 	if err := json.Unmarshal([]byte(out), &got); err != nil {
 		t.Fatalf("parse: %v, raw: %s", err, out)
@@ -1330,7 +1330,7 @@ func TestMCPRecent_ScopedToProjectExcludesOthers(t *testing.T) {
 	st.UpdateTask(pa.ID, ta.ID, "", "", models.StatusDone, -1, "")
 	st.UpdateTask(pb.ID, tb.ID, "", "", models.StatusDone, -1, "")
 
-	out := callTool(st, "segments_recent", map[string]interface{}{"project_id": pa.ID})
+	out := callTool(st, mcpContext{}, "segments_recent", map[string]interface{}{"project_id": pa.ID})
 	var got []map[string]interface{}
 	if err := json.Unmarshal([]byte(out), &got); err != nil {
 		t.Fatalf("parse: %v, raw: %s", err, out)
