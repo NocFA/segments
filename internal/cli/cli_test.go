@@ -63,6 +63,58 @@ func TestCallToolCreateTaskPriorityAsString(t *testing.T) {
 	}
 }
 
+func TestParseBlockedByArg(t *testing.T) {
+	cases := []struct {
+		name   string
+		in     interface{}
+		want   []string
+		wantNil bool
+		wantErr bool
+	}{
+		{name: "nil preserves", in: nil, wantNil: true},
+		{name: "empty string clears", in: "", want: []string{}},
+		{name: "single id string", in: "abc", want: []string{"abc"}},
+		{name: "real array", in: []interface{}{"id1", "id2"}, want: []string{"id1", "id2"}},
+		{name: "real array with empties filtered", in: []interface{}{"id1", "", "id2"}, want: []string{"id1", "id2"}},
+		{name: "empty array clears", in: []interface{}{}, want: []string{}},
+		{name: "json-encoded array string (Claude Code coercion path)", in: `["id1","id2"]`, want: []string{"id1", "id2"}},
+		{name: "json-encoded array with whitespace", in: `  ["id1", "id2"]  `, want: []string{"id1", "id2"}},
+		{name: "json-encoded empty array string clears", in: `[]`, want: []string{}},
+		{name: "malformed json array falls back to literal id", in: `[not-json`, want: []string{"[not-json"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := parseBlockedByArg(c.in, nil)
+			if c.wantErr {
+				if err == nil {
+					t.Fatalf("want error, got nil; result=%v", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if c.wantNil {
+				if got != nil {
+					t.Fatalf("want nil pointer (preserve), got %v", *got)
+				}
+				return
+			}
+			if got == nil {
+				t.Fatalf("want %v, got nil pointer", c.want)
+			}
+			if len(*got) != len(c.want) {
+				t.Fatalf("len: got %v, want %v", *got, c.want)
+			}
+			for i, w := range c.want {
+				if (*got)[i] != w {
+					t.Fatalf("index %d: got %q, want %q (full: %v)", i, (*got)[i], w, *got)
+				}
+			}
+		})
+	}
+}
+
 func TestSelectNextTask_OrderingByPriorityThenAge(t *testing.T) {
 	now := time.Now()
 	tasks := []models.Task{

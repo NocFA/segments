@@ -3748,6 +3748,27 @@ func parseBlockedByArg(v interface{}, created []*models.Task) (*[]string, error)
 			empty := []string{}
 			return &empty, nil
 		}
+		// Some MCP transports (notably Claude Code) collapse array-valued
+		// fields to a JSON-encoded string when the schema is anyOf[array,
+		// string]. Detect and re-parse so callers can pass an array even
+		// through those clients.
+		if trimmed := strings.TrimSpace(x); strings.HasPrefix(trimmed, "[") {
+			var arr []string
+			if err := json.Unmarshal([]byte(trimmed), &arr); err == nil {
+				out := make([]string, 0, len(arr))
+				for _, s := range arr {
+					if s == "" {
+						continue
+					}
+					resolved, err := resolve(s)
+					if err != nil {
+						return nil, err
+					}
+					out = append(out, resolved)
+				}
+				return &out, nil
+			}
+		}
 		resolved, err := resolve(x)
 		if err != nil {
 			return nil, err
