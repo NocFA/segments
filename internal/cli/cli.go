@@ -4,6 +4,7 @@ import (
 	"bytes"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -300,6 +301,7 @@ var cmdGroups = []struct {
 	{"Tasks", []cmdInfo{
 		{"list", "list projects and tasks", []string{"status"}},
 		{"next", "pick the best next task to work on", []string{"n"}},
+		{"recent", "list recently closed tasks", nil},
 		{"stats", "dashboard: progress, agents, recent activity", []string{"st"}},
 		{"view", "view full task details", nil},
 		{"add", "create a task", nil},
@@ -451,6 +453,8 @@ func Run(args []string, version string) error {
 		return runList(s, rest)
 	case "next":
 		return runNext(s, rest)
+	case "recent":
+		return runRecent(s, rest)
 	case "stats":
 		return runStats(s, rest)
 	case "view":
@@ -1011,16 +1015,23 @@ func runList(s *store.Store, args []string) error {
 
 	var hint string
 	var showAll bool
+	var noRecent bool
 	for _, a := range args {
-		if a == "-a" || a == "--all" {
+		switch a {
+		case "-a", "--all":
 			showAll = true
-		} else {
+		case "--no-recent":
+			noRecent = true
+		default:
 			hint = a
 		}
 	}
 
 	if proj := resolveProject(projects, hint); proj != nil {
 		printTasks(s, proj, showAll)
+		if !noRecent {
+			printRecentFooter(s, proj.ID)
+		}
 		return nil
 	}
 
@@ -1050,7 +1061,43 @@ func runList(s *store.Store, args []string) error {
 		fmt.Printf("  %s  %s  %s\n", dim.Render(p.ID[:8]), bold.Render(p.Name), color.Render(progress)+dim.Render(" done"))
 	}
 	fmt.Println()
+	if !noRecent {
+		printRecentFooter(s, "")
+	}
 	return nil
+}
+
+// printRecentFooter appends a "Last 3 closed: ..." block to the list/status
+// output. Looks back 30 days; nothing in window means no footer. projID
+// scopes to one project; empty string scans all projects (with project tag).
+func printRecentFooter(s *store.Store, projID string) {
+	entries, err := collectRecentEntries(s, projID)
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().Add(-30 * 24 * time.Hour)
+	entries = filterRecentEntries(entries, cutoff, 3)
+	if len(entries) == 0 {
+		return
+	}
+	fmt.Println(dim.Render("Last " + strconv.Itoa(len(entries)) + " closed:"))
+	scoped := projID != ""
+	for _, e := range entries {
+		ts := e.Task.UpdatedAt
+		if e.Task.ClosedAt != nil {
+			ts = *e.Task.ClosedAt
+		}
+		line := fmt.Sprintf("  %s  %s  %s",
+			dim.Render(e.Task.ID[:8]),
+			e.Task.Title,
+			dim.Render("("+relativeAgo(ts)+")"),
+		)
+		if !scoped {
+			line += "  " + dim.Render(e.ProjectName)
+		}
+		fmt.Println(line)
+	}
+	fmt.Println()
 }
 
 // priorityBucket orders priorities 1 < 2 < 3 < unset so the "ready" queue
@@ -1233,6 +1280,91 @@ func runNext(s *store.Store, args []string) error {
 
 	fmt.Println()
 	fmt.Println(dim.Render("\u21b3 sg start " + headline.ID[:8] + " to claim"))
+	fmt.Println()
+	return nil
+}
+
+// runRecent prints recently closed/done tasks across one or all projects.
+// Mirrors the segments_recent MCP tool but renders human-readably with a
+// "Xh ago" relative timestamp and optional project tag in cross-project mode.
+// Flags: --limit N (default 10), --since DURATION, --project NAME.
+func runRecent(s *store.Store, args []string) error {
+	limit := 10
+	sinceArg := ""
+	projHint := ""
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--limit" || a == "-n":
+			if i+1 >= len(args) {
+				return fmt.Errorf("%s requires a number", a)
+			}
+			n, err := strconv.Atoi(args[i+1])
+			if err != nil {
+				return fmt.Errorf("invalid %s value: %s", a, args[i+1])
+			}
+			limit = n
+			i++
+		case a == "--since":
+			if i+1 >= len(args) {
+				return fmt.Errorf("--since requires a duration")
+			}
+			sinceArg = args[i+1]
+			i++
+		case a == "--project" || a == "-p":
+			if i+1 >= len(args) {
+				return fmt.Errorf("%s requires a name", a)
+			}
+			projHint = args[i+1]
+			i++
+		default:
+			return fmt.Errorf("unknown argument: %s", a)
+		}
+	}
+	if limit <= 0 {
+		limit = 10
+	}
+
+	var cutoff time.Time
+	if sinceArg != "" {
+		c, err := parseSince(time.Now(), sinceArg)
+		if err != nil {
+			return err
+		}
+		cutoff = c
+	}
+
+	entries, err := collectRecentEntries(s, projHint)
+	if err != nil {
+		return err
+	}
+	entries = filterRecentEntries(entries, cutoff, limit)
+
+	fmt.Println()
+	if len(entries) == 0 {
+		fmt.Println("  " + dim.Render("No recently closed tasks."))
+		fmt.Println()
+		return nil
+	}
+
+	scoped := projHint != ""
+	for _, e := range entries {
+		ts := time.Time{}
+		if e.Task.ClosedAt != nil {
+			ts = *e.Task.ClosedAt
+		} else {
+			ts = e.Task.UpdatedAt
+		}
+		line := fmt.Sprintf("  %s  %s  %s",
+			dim.Render(e.Task.ID[:8]),
+			e.Task.Title,
+			dim.Render("("+relativeAgo(ts)+")"),
+		)
+		if !scoped {
+			line += "  " + dim.Render(e.ProjectName)
+		}
+		fmt.Println(line)
+	}
 	fmt.Println()
 	return nil
 }
@@ -2776,71 +2908,36 @@ func fileExists(path string) bool {
 	return err == nil
 }
 
-const segmentsShortcutInstructions = `Segments is the persistent task tracker for this project. Tasks survive context wipes and outlive sessions; TodoWrite does not. Use Segments to plan multi-step work, scaffold upcoming tasks, track what is in progress, and capture follow-ups so they are not lost.
-
-Schema pre-load (Claude Code and any client that defers MCP tool schemas). If your tool list shows "mcp__segments__*" tools as deferred (schemas not yet loaded), issue this as your FIRST tool call of the session so the schemas are ready before you need them:
-  ToolSearch select:mcp__segments__segments_create_tasks,mcp__segments__segments_update_tasks,mcp__segments__segments_list_tasks,mcp__segments__segments_list_projects,mcp__segments__segments_update_task,mcp__segments__segments_create_task,mcp__segments__segments_get_task,mcp__segments__segments_delete_task,mcp__segments__segments_delete_tasks,mcp__segments__segments_create_project,mcp__segments__segments_rename_project
-Skip this if your client already lists the schemas inline (Pi, OpenCode, or Claude Code with ENABLE_TOOL_SEARCH=false or an "mcp__segments" allowlist entry). Do not pre-load every turn, only when schemas are actually deferred.
-
-When to use it (proactively, without being asked):
-  Planning           Break a feature or refactor into steps BEFORE coding. Use segments_create_tasks to stub the whole queue in ONE call with priority + blocked_by on every entry.
-  Scaffolding        Stub upcoming work as todo tasks so the queue is visible.
-  Starting / claiming work
-                     Pick from the Ready queue (unblocked todos, listed below). IMMEDIATELY set status=in_progress to "claim" the task so other agents/sessions do not pick up the same work. If the user hands you multiple task IDs to work in sequence, claim ALL of them up front with segments_update_tasks (bulk) so every one is marked in_progress before you start task one; then process them one at a time. Claim only what you will actually work in this session; revert unwanted claims back to todo so others can pick them up.
-  Finishing          segments_update_task status=done when the work lands (or segments_update_tasks to mark several done at once).
-  New scope          Capture every "we should also..." as a new todo immediately so it survives a context wipe. If the follow-up was discovered while working on task X and cannot start until X lands, set blocked_by=<X's id> (the "discovered-from" pattern).
-  "segment it" / "sg it" / "seg it" / "segment this" / "sg this" / "seg this"
-                     Capture the current topic as a task right now, no clarifying questions.
-
-Task body is the contract. Every body must be self-contained: what to do, relevant file paths, constraints, expected outcome. A fresh session with no history must be able to pick it up from the body alone.
-
-Priority is an integer 1, 2, or 3 -- pick one every time you CREATE a task. Use numbers, NOT the words "high"/"medium"/"low". Match the user's signal:
-  1  URGENT. "drop everything and fix X", "this is blocking prod", "broken build", "critical bug". Also: any task that is actively blocking other ready work.
-  2  NORMAL. "let's do X", "add Y", "refactor Z", "ship the feature" -- regular session work. Default to 2 when the intent is clearly "do this now or next" but not urgent.
-  3  BACKLOG. "sometime we should", "maybe later", "one idea is", "let's discuss". Not this session.
-  0 is "unset" and exists only for legacy tasks created before triage. Never pick 0 when creating. If you are genuinely unsure between tiers, default to 2, not 0.
-
-blocked_by is a correctness signal, not a hint. Set blocked_by=<task_id> whenever task A literally cannot start until task B lands. Omitting it when there is a real hard dependency misleads the next agent about which task is actually actionable in the Ready queue.
-  You MUST set blocked_by in these cases:
-    - Greenfield scaffold: the bootstrap/init task (e.g. "Initialize project") blocks every downstream task. In a segments_create_tasks batch, put init as #0 and give every other task blocked_by="#0".
-    - Infra before feature: "Install Stripe SDK" blocks "Build Merch page".
-    - Schema before use: "Add DB migration" blocks "Wire up form submission".
-    - Discovered-from: task discovered mid-work on X and cannot start until X is done -> blocked_by=<X's id>.
-  Leave blocked_by empty only for genuinely independent tasks. "Do this after that" for flow reasons is handled by priority + list order, not blocked_by. Never create cycles.
-  In segments_create_tasks, "#0".."#N" references earlier entries in the same batch; the server resolves these to real UUIDs. Prefer this over creating tasks in two calls just to get UUIDs. Creating a scaffolded batch without linking the obvious dependency chain is a correctness mistake, not a style choice.
-
-MCP tools (server name: "segments"). Your client may expose them under these exact names or with an "mcp__segments__" prefix (Claude Code does). Trust your client's own tool list; do not invent names. project_id is OPTIONAL on all task tools: it auto-resolves from CWD basename, single-project fallback, or $SEGMENTS_PROJECT_ID. If your client advertises no segments_* tools at all, the MCP server is not connected -- fall back to the CLI below; do not guess tool names. Prefer the bulk variants (segments_create_tasks / segments_update_tasks / segments_delete_tasks) whenever you are touching two or more tasks -- one call, fewer tokens, atomic claim semantics.
-  segments_list_projects()
-  segments_list_tasks(project_id?, status?)
-  segments_get_task(task_id, project_id?)
-  segments_create_task(title, body?, priority=1|2|3, blocked_by?, project_id?)
-  segments_create_tasks(tasks: [{title, body?, priority=1|2|3, blocked_by?}, ...], project_id?)
-      Preferred for planning: scaffold the whole queue in one call. Use "#0".."#N" in blocked_by to reference earlier tasks in the same batch (resolved to their new UUIDs).
-  segments_update_task(task_id, title?, body?, status?, priority?, blocked_by?, project_id?)
-      status: todo | in_progress | done | closed | blocker
-      Only provided fields change; omitted fields are preserved.
-  segments_update_tasks(updates: [{task_id, title?, body?, status?, priority?, blocked_by?}, ...], project_id?)
-      Bulk update. PREFERRED for claiming a run of tasks (set status=in_progress on each) in ONE call, or for marking several tasks done at session end. Per-entry fields follow segments_update_task semantics.
-  segments_delete_task(task_id, project_id?)
-  segments_delete_tasks(task_ids: [id1, id2, ...], project_id?)
-      Bulk delete. PREFERRED whenever removing two or more tasks.
-
-CLI fallback (only if MCP tools are unavailable). -p is optional: sg auto-resolves project_id the same way MCP does (CWD basename / single-project / $SEGMENTS_PROJECT_ID). Pass -p only to override.
-  sg list                                   List projects and tasks
-  sg view <task_id>                         Show full task details
-  sg add "<title>" -m "<body>"              Create a task (auto-resolves project)
-  sg done <task_id>                         Mark task done (auto-resolves project)
-  sg close <task_id>                        Close a task (auto-resolves project)
-
-Ready queue = todos whose blocker is empty or done. Pick from there first. IDs below are full UUIDs, ready to paste into tool calls.`
-
 func runContext(s *store.Store) error {
-	projects, err := s.ListProjects()
-	if err != nil || len(projects) == 0 {
+	cfg, _ := server.LoadConfig(filepath.Join(dataDir, "config.yaml"))
+	context := buildContextPayload(s, cfg)
+	if context == "" {
 		return nil
 	}
+	escaped, _ := json.Marshal(context)
+	fmt.Printf(`{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":%s}}`, escaped)
+	return nil
+}
 
-	lines := []string{segmentsShortcutInstructions, ""}
+// buildContextPayload assembles the additionalContext string emitted by
+// `segments context`. The stable "how to use Segments" prose lives in
+// mcpServerInstructions (surfaced by MCP clients without 2KB truncation);
+// this hook emits only per-session-variable content so the whole payload
+// stays under the Claude Code 2KB inline preview window. Order matters:
+// segmentsContext banner first so it lands in-frame even if the tail is
+// truncated. Returns "" when there is nothing to inject (no projects).
+func buildContextPayload(s *store.Store, cfg *server.Config) string {
+	projects, err := s.ListProjects()
+	if err != nil || len(projects) == 0 {
+		return ""
+	}
+
+	var lines []string
+	if sessionStartInjectEnabled(cfg) {
+		if block := segmentsContextBlock(s, projects); block != "" {
+			lines = append(lines, block, "")
+		}
+	}
 	for _, p := range projects {
 		tasks, _ := s.ListTasks(p.ID)
 		g := groupTasksForContext(tasks)
@@ -2864,11 +2961,78 @@ func runContext(s *store.Store) error {
 		}
 	}
 
-	context := strings.Join(lines, "\n")
-	escaped, _ := json.Marshal(context)
+	return strings.Join(lines, "\n")
+}
 
-	fmt.Printf(`{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":%s}}`, escaped)
-	return nil
+// sessionStartInjectEnabled returns true when the segmentsContext block should
+// be appended. Tri-state: nil (unset) and true both enable; only an explicit
+// false disables.
+func sessionStartInjectEnabled(cfg *server.Config) bool {
+	if cfg == nil || cfg.SessionStartInject == nil {
+		return true
+	}
+	return *cfg.SessionStartInject
+}
+
+// segmentsContextBlock renders the compact SessionStart banner: CWD-resolved
+// project, up to 5 in-progress tasks, up to 5 recently closed tasks. Target
+// size is <2KB so it does not crowd the agent's context. When no project
+// matches the CWD basename, emits a "<none>" stanza listing available
+// projects so the agent knows what to pass as a hint.
+func segmentsContextBlock(s *store.Store, projects []models.Project) string {
+	proj := resolveProject(projects, "")
+	var b strings.Builder
+	b.WriteString("# segmentsContext\n")
+	if proj == nil {
+		cwd, _ := os.Getwd()
+		b.WriteString(fmt.Sprintf("Project: <none> (CWD basename %q does not match any project; pass project_id explicitly)\n", filepath.Base(cwd)))
+		b.WriteString("Available projects:\n")
+		for _, p := range projects {
+			b.WriteString(fmt.Sprintf("  %s  %s\n", p.ID[:8], p.Name))
+		}
+		return strings.TrimRight(b.String(), "\n")
+	}
+	b.WriteString(fmt.Sprintf("Project: %s  project_id=%s\n", proj.Name, proj.ID))
+
+	tasks, _ := s.ListTasks(proj.ID)
+
+	var inProgress []models.Task
+	for _, t := range tasks {
+		if t.Status == models.StatusInProgress {
+			inProgress = append(inProgress, t)
+		}
+	}
+	sort.Slice(inProgress, func(i, j int) bool {
+		return inProgress[i].UpdatedAt.After(inProgress[j].UpdatedAt)
+	})
+	if len(inProgress) > 5 {
+		inProgress = inProgress[:5]
+	}
+	b.WriteString("In-progress (up to 5):\n")
+	if len(inProgress) == 0 {
+		b.WriteString("  (none)\n")
+	}
+	for _, t := range inProgress {
+		b.WriteString(fmt.Sprintf("  %s  %s\n", t.ID[:8], t.Title))
+	}
+
+	entries := make([]recentEntry, 0, len(tasks))
+	for _, t := range tasks {
+		entries = append(entries, recentEntry{Task: t, ProjectID: proj.ID, ProjectName: proj.Name})
+	}
+	recent := filterRecentEntries(entries, time.Time{}, 5)
+	b.WriteString("Recently closed (last 5):\n")
+	if len(recent) == 0 {
+		b.WriteString("  (none)\n")
+	}
+	for _, e := range recent {
+		ts := e.Task.UpdatedAt
+		if e.Task.ClosedAt != nil {
+			ts = *e.Task.ClosedAt
+		}
+		b.WriteString(fmt.Sprintf("  %s  %s (%s)\n", e.Task.ID[:8], e.Task.Title, relativeAgo(ts)))
+	}
+	return strings.TrimRight(b.String(), "\n")
 }
 
 type contextTaskGroups struct {
@@ -2965,15 +3129,61 @@ func negotiateProtocolVersion(req map[string]interface{}) string {
 	return supportedMCPProtocolVersions[0]
 }
 
-const mcpServerInstructions = `Segments tracks multi-session work as a dependency graph. Prefer the bulk variants (segments_create_tasks / segments_update_tasks / segments_delete_tasks) whenever you touch two or more tasks -- one round-trip, fewer tokens. The array argument for each MUST be a real JSON array, not a stringified one. project_id is optional: auto-resolves from CWD basename, single-project fallback, or $SEGMENTS_PROJECT_ID.
+const mcpServerInstructions = `Segments is the persistent task tracker for this project. Tasks survive context wipes and outlive sessions; TodoWrite does not. Use Segments to plan multi-step work, scaffold upcoming tasks, track what is in progress, and capture follow-ups so they are not lost.
 
-Claim work by setting status=in_progress the moment you start a task -- this prevents other agents/sessions from picking up the same work. When the user hands you multiple task IDs to work in sequence, claim ALL of them up front via segments_update_tasks (bulk) so every one is marked in_progress before you start task one, then process them one at a time. Mark status=done as each task's work lands. Capture every "we should also..." as a new task so it survives context wipes.
+When to use it (proactively, without being asked):
+  Planning           Break a feature or refactor into steps BEFORE coding. Use segments_create_tasks to stub the whole queue in ONE call with priority + blocked_by on every entry.
+  Scaffolding        Stub upcoming work as todo tasks so the queue is visible.
+  Starting / claiming work
+                     Pick from the Ready queue (unblocked todos). IMMEDIATELY set status=in_progress to "claim" the task so other agents/sessions do not pick up the same work. If the user hands you multiple task IDs to work in sequence, claim ALL of them up front with segments_update_tasks (bulk) so every one is marked in_progress before you start task one; then process them one at a time. Claim only what you will actually work in this session; revert unwanted claims back to todo so others can pick them up.
+  Finishing          segments_update_task status=done when the work lands (or segments_update_tasks to mark several done at once).
+  New scope          Capture every "we should also..." as a new todo immediately so it survives a context wipe. If the follow-up was discovered while working on task X and cannot start until X lands, set blocked_by=<X's id> (the "discovered-from" pattern).
+  "segment it" / "sg it" / "seg it" / "segment this" / "sg this" / "seg this"
+                     Capture the current topic as a task right now, no clarifying questions.
 
-Priority is an integer 1/2/3 and is required when creating -- pick one based on user intent, never omit it. 1=URGENT ("drop everything", "broken build", "blocking prod", or actively blocking other ready work). 2=NORMAL ("let's do X" / regular session work; default when the intent is clearly now-or-next but not urgent). 3=BACKLOG ("sometime", "maybe later", "one idea is", future idea). 0 is unset (legacy only); do NOT pick 0 when creating.
+Task body is the contract. Every body must be self-contained: what to do, relevant file paths, constraints, expected outcome. A fresh session with no history must be able to pick it up from the body alone.
 
-blocked_by is a correctness signal, not a hint. Set it whenever task A literally cannot start until task B lands: bootstrap blocks all downstream tasks, "Install X" blocks "Use X", "Add schema" blocks "Query schema", follow-ups discovered while working on X get blocked_by=X (discovered-from). In segments_create_tasks, "#0".."#N" references earlier batch entries. Creating a scaffolded batch without linking the obvious dependency chain is a correctness mistake, not a style choice.
+Prefer the bulk variants (segments_create_tasks / segments_update_tasks / segments_delete_tasks) whenever you touch two or more tasks -- one round-trip, fewer tokens. The array argument for each MUST be a real JSON array, not a stringified one. project_id is optional on all task tools: auto-resolves from CWD basename, single-project fallback, or $SEGMENTS_PROJECT_ID.
 
-If your client defers MCP tool schemas behind a ToolSearch / lazy-load mechanism (Claude Code does this by default), pre-load the segments schemas as your first tool call of the session: ToolSearch select:mcp__segments__segments_create_tasks,mcp__segments__segments_update_tasks,mcp__segments__segments_list_tasks,mcp__segments__segments_list_projects,mcp__segments__segments_update_task,mcp__segments__segments_create_task,mcp__segments__segments_get_task,mcp__segments__segments_delete_task,mcp__segments__segments_delete_tasks,mcp__segments__segments_create_project,mcp__segments__segments_rename_project. For a persistent fix, tell the user to add "mcp__segments" to permissions.allow in their Claude Code settings.json (via sg setup) or set ENABLE_TOOL_SEARCH=false; Segments is cross-session infrastructure and should not pay a schema round-trip on every new session.`
+Priority is an integer 1, 2, or 3 and is required on CREATE -- never omit it. Use numbers, NOT the words "high"/"medium"/"low". Match the user's signal:
+  1  URGENT. "drop everything and fix X", "this is blocking prod", "broken build", "critical bug". Also: any task actively blocking other ready work.
+  2  NORMAL. "let's do X", "add Y", "refactor Z", "ship the feature" -- regular session work. Default to 2 when the intent is clearly "do this now or next" but not urgent.
+  3  BACKLOG. "sometime we should", "maybe later", "one idea is", "let's discuss". Not this session.
+  0 is "unset" and exists only for legacy tasks. Never pick 0 when creating; default to 2 if genuinely unsure.
+
+blocked_by is a correctness signal, not a hint. Set blocked_by=<task_id> whenever task A literally cannot start until task B lands. Omitting it when there is a real hard dependency misleads the next agent about which task is actionable.
+  You MUST set blocked_by in these cases:
+    - Greenfield scaffold: the bootstrap/init task blocks every downstream task. In a segments_create_tasks batch, put init as #0 and give every other task blocked_by="#0".
+    - Infra before feature: "Install X" blocks "Use X". "Add DB migration" blocks "Query schema".
+    - Discovered-from: follow-up discovered mid-work on X and cannot start until X is done -> blocked_by=<X's id>.
+  Leave blocked_by empty only for genuinely independent tasks. "Do this after that" for flow reasons is handled by priority + list order, not blocked_by. Never create cycles.
+  In segments_create_tasks, "#0".."#N" references earlier entries in the same batch; the server resolves these to real UUIDs. Creating a scaffolded batch without linking the obvious dependency chain is a correctness mistake, not a style choice.
+
+Ready queue = todos whose blocker is empty or done. Pick from there first. The SessionStart hook prints a compact segmentsContext banner listing the CWD-resolved project, in-progress tasks, and recently closed tasks; use that to orient before querying.
+
+MCP tools (server name: "segments"). Your client may expose them under these exact names or with an "mcp__segments__" prefix (Claude Code does). Trust your client's own tool list; do not invent names. If your client advertises no segments_* tools at all, the MCP server is not connected -- fall back to the CLI below.
+  segments_list_projects()
+  segments_list_tasks(project_id?, status?, fields?, limit?, since?, order_by?)
+  segments_get_task(task_id, project_id?)
+  segments_recent(project_id?, limit?, since?)  "What did we just finish?" -- compact list of recently closed tasks. Omit project_id to scan all projects.
+  segments_create_task(title, body?, priority=1|2|3, blocked_by?, project_id?)
+  segments_create_tasks(tasks: [{title, body?, priority=1|2|3, blocked_by?}, ...], project_id?)  Preferred for planning.
+  segments_update_task(task_id, title?, body?, status?, priority?, blocked_by?, project_id?)  status: todo | in_progress | done | closed | blocker. Only provided fields change.
+  segments_update_tasks(updates: [{task_id, ...}, ...], project_id?)  PREFERRED for claiming a run of tasks or marking several done at session end.
+  segments_delete_task(task_id, project_id?)
+  segments_delete_tasks(task_ids: [id1, id2, ...], project_id?)  PREFERRED whenever removing two or more tasks.
+
+CLI fallback (only if MCP tools are unavailable). -p is optional: sg auto-resolves project_id the same way MCP does.
+  sg list                                   List projects and tasks
+  sg view <task_id>                         Show full task details
+  sg add "<title>" -m "<body>"              Create a task
+  sg done <task_id>                         Mark task done
+  sg close <task_id>                        Close a task
+  sg recent                                 Recently closed tasks
+
+Schema deferral: Claude Code and other clients that use ToolSearch defer MCP tool schemas by default. If your tool list shows "mcp__segments__*" tools as deferred (schemas not loaded), issue this as your FIRST tool call of the session to load them before you need them:
+  ToolSearch select:mcp__segments__segments_create_tasks,mcp__segments__segments_update_tasks,mcp__segments__segments_list_tasks,mcp__segments__segments_list_projects,mcp__segments__segments_update_task,mcp__segments__segments_create_task,mcp__segments__segments_get_task,mcp__segments__segments_delete_task,mcp__segments__segments_delete_tasks,mcp__segments__segments_create_project,mcp__segments__segments_rename_project,mcp__segments__segments_recent
+For a persistent fix, set ENABLE_TOOL_SEARCH=false in Claude Code's environment -- that disables schema deferral globally. A "mcp__segments" entry in permissions.allow (written by sg setup) pre-authorizes every Segments tool so no permission prompts fire, but it does NOT flip schema loading; only ENABLE_TOOL_SEARCH does.`
 
 func handleMCP(s *store.Store, req map[string]interface{}) map[string]interface{} {
 	method, _ := req["method"].(string)
@@ -3047,10 +3257,14 @@ func mcpToolDefs() []map[string]interface{} {
 				"project_id": prop("string", "Project ID"),
 				"name":       prop("string", "New name"),
 			})},
-		{"name": "segments_list_tasks", "description": "List tasks for a project. Returns all fields: id, title, status, priority, body, blocked_by, dates.",
+		{"name": "segments_list_tasks", "description": "List tasks for a project. Returns compact rows by default (id, title, status, priority, blocked_by, closed_at, updated_at) so the body field stays out of the response. Pass fields=full when you actually need bodies. Responses over ~50KB are truncated and returned as a wrapper object {tasks, truncated, returned, total, hint} so the agent can narrow with since/limit/status/fields=compact. Use since with a duration (7d, 24h, 30m) or RFC3339 date to pull only recent activity.",
 			"inputSchema": schema(nil, map[string]interface{}{
 				"project_id": optProject,
 				"status":     prop("string", "Optional filter: todo | in_progress | done | closed | blocker"),
+				"limit":      prop("number", "Max tasks returned. Default 50. Non-positive values fall back to the default."),
+				"since":      prop("string", "Only return tasks updated since this point. Accepts RFC3339 date or duration like 7d, 24h, 30m. When status=done|closed, filters by closed_at instead of updated_at."),
+				"fields":     prop("string", "compact (default) omits body; full includes it. Prefer compact when scanning many tasks."),
+				"order_by":   prop("string", "updated_at_desc (default) | closed_at_desc (auto when status=done|closed and order_by unset) | sort_order_asc"),
 			})},
 		{"name": "segments_create_task", "description": "Create a single task. For two or more tasks, ALWAYS prefer segments_create_tasks (one call, much cheaper, supports cross-task blocked_by refs). Always pass priority (1/2/3) and set blocked_by when a hard dependency exists.",
 			"inputSchema": schema([]string{"title"}, map[string]interface{}{
@@ -3078,7 +3292,7 @@ func mcpToolDefs() []map[string]interface{} {
 					},
 				},
 			})},
-		{"name": "segments_update_task", "description": "Update a single task. For two or more updates, ALWAYS prefer segments_update_tasks (one call, fewer tokens, atomic claim semantics). Only provided fields are changed; omitted fields are preserved. Use status=in_progress to claim a task when you start work and status=done when it lands.",
+		{"name": "segments_update_task", "description": "Update a single task. For two or more updates, ALWAYS prefer segments_update_tasks (one call, fewer tokens, atomic claim semantics). Only provided fields are changed; omitted fields are preserved. Use status=in_progress to claim a task when you start work and status=done when it lands. task_id is resolved across projects (full UUID or unique prefix), so passing just the id works even when the task lives in a different project than your CWD.",
 			"inputSchema": schema([]string{"task_id"}, map[string]interface{}{
 				"project_id": optProject,
 				"task_id":    prop("string", "Task ID"),
@@ -3108,7 +3322,7 @@ func mcpToolDefs() []map[string]interface{} {
 					},
 				},
 			})},
-		{"name": "segments_delete_task", "description": "Delete a single task. For two or more deletes, ALWAYS prefer segments_delete_tasks.",
+		{"name": "segments_delete_task", "description": "Delete a single task. For two or more deletes, ALWAYS prefer segments_delete_tasks. task_id is resolved across projects (full UUID or unique prefix).",
 			"inputSchema": schema([]string{"task_id"}, map[string]interface{}{
 				"project_id": optProject,
 				"task_id":    prop("string", "Task ID"),
@@ -3122,10 +3336,16 @@ func mcpToolDefs() []map[string]interface{} {
 					"items":       map[string]interface{}{"type": "string"},
 				},
 			})},
-		{"name": "segments_get_task", "description": "Get full task details including body, priority, blocked_by, and dates.",
+		{"name": "segments_get_task", "description": "Get full task details including body, priority, blocked_by, and dates. task_id accepts a full UUID or a unique prefix; the task is found across all projects even when its project_id differs from your CWD, so passing just the id is enough. When resolution crosses projects, the response includes resolved_from_project_id so you can pass it on subsequent calls to skip the scan.",
 			"inputSchema": schema([]string{"task_id"}, map[string]interface{}{
 				"project_id": optProject,
 				"task_id":    prop("string", "Task ID"),
+			})},
+		{"name": "segments_recent", "description": "Recent work summary: compact list of recently closed/done tasks, ordered by closed_at desc. This is the right tool for 'what did we just finish?', end-of-session recaps, and cross-session handoff context. Omit project_id to scan ALL projects (each row carries project_id/project_name for disambiguation); pass it to scope to one project. Body is never returned -- each row has a short summary (first line of body). Prefer this over segments_list_tasks(status=done) when you just want the headline.",
+			"inputSchema": schema(nil, map[string]interface{}{
+				"project_id": optProject,
+				"limit":      prop("number", "Max rows returned. Default 10. Non-positive values fall back to the default."),
+				"since":      prop("string", "Only return tasks closed since this point. Accepts RFC3339 date or duration like 7d, 24h, 30m. Tasks without a closed_at fall back to updated_at."),
 			})},
 	}
 }
@@ -3163,6 +3383,128 @@ func resolveProjectIDForMCP(s *store.Store, hint string) (string, error) {
 	return "", fmt.Errorf("cannot auto-resolve project: %d exist [%s]. Pass project_id explicitly or set $SEGMENTS_PROJECT_ID", len(projects), strings.Join(names, ", "))
 }
 
+// taskRef is the result of resolving a task reference (full ID or UUID prefix)
+// across all projects for MCP reads/updates/deletes. If the caller passed a
+// project_id hint that turned out not to contain the task, ResolvedFromOverride
+// is true so the response can advertise where the task actually lives.
+type taskRef struct {
+	Task                 *models.Task
+	ProjectID            string
+	ResolvedFromOverride bool
+}
+
+// ambiguousTaskErr is returned when a prefix matches more than one task across
+// projects. Handlers detect it with errors.As and emit a structured response
+// listing candidates instead of just failing with a plain message.
+type ambiguousTaskErr struct {
+	Prefix     string
+	Candidates []store.TaskMatch
+}
+
+func (e *ambiguousTaskErr) Error() string {
+	return fmt.Sprintf("ambiguous task id %q matches %d tasks across projects", e.Prefix, len(e.Candidates))
+}
+
+// resolveTaskRef finds a task by full UUID or UUID prefix. Used by MCP
+// read/update/delete handlers so a task created while CWD=project-A can be
+// operated on from CWD=project-B. Semantics:
+//  1. hintPID is honored only if explicitly passed (resolved via the project
+//     hint format: name or UUID prefix). CWD auto-resolution is NOT applied
+//     for reads; that was the bug this helper exists to fix.
+//  2. If hintPID resolves and the task is there as a full UUID, fast-path to
+//     Store.GetTask.
+//  3. Otherwise scan all projects. Zero matches -> wrapped not-found error.
+//     One match -> return it, flagging ResolvedFromOverride when the caller
+//     passed a hintPID that turned out to be wrong. Many matches -> ambig err.
+func resolveTaskRef(s *store.Store, hintPID, idOrPrefix string) (*taskRef, error) {
+	if idOrPrefix == "" {
+		return nil, fmt.Errorf("task_id is required")
+	}
+	resolvedHint := ""
+	if hintPID != "" {
+		projects, err := s.ListProjects()
+		if err != nil {
+			return nil, err
+		}
+		if p := resolveProject(projects, hintPID); p != nil {
+			resolvedHint = p.ID
+		}
+	}
+	if resolvedHint != "" && len(idOrPrefix) == 36 {
+		if t, err := s.GetTask(resolvedHint, idOrPrefix); err == nil {
+			return &taskRef{Task: t, ProjectID: resolvedHint}, nil
+		} else if !errors.Is(err, store.ErrTaskNotFound) {
+			return nil, err
+		}
+	}
+	matches, err := s.FindTaskAny(idOrPrefix)
+	if err != nil {
+		return nil, err
+	}
+	if len(matches) == 0 {
+		return nil, fmt.Errorf("task %q not found in any project", idOrPrefix)
+	}
+	if len(matches) > 1 {
+		return nil, &ambiguousTaskErr{Prefix: idOrPrefix, Candidates: matches}
+	}
+	m := matches[0]
+	return &taskRef{
+		Task:                 m.Task,
+		ProjectID:            m.ProjectID,
+		ResolvedFromOverride: resolvedHint != "" && resolvedHint != m.ProjectID,
+	}, nil
+}
+
+// emitAmbigTaskErr formats an ambiguousTaskErr as the structured JSON response
+// that MCP handlers return to the caller. Returns ("", false) when err is not
+// an ambiguity error so the caller can fall back to plain error marshalling.
+func emitAmbigTaskErr(s *store.Store, err error) (string, bool) {
+	var ae *ambiguousTaskErr
+	if !errors.As(err, &ae) {
+		return "", false
+	}
+	nameOf := map[string]string{}
+	if projects, perr := s.ListProjects(); perr == nil {
+		for _, p := range projects {
+			nameOf[p.ID] = p.Name
+		}
+	}
+	cands := make([]map[string]string, 0, len(ae.Candidates))
+	for _, c := range ae.Candidates {
+		cands = append(cands, map[string]string{
+			"id":           c.Task.ID,
+			"project_id":   c.ProjectID,
+			"project_name": nameOf[c.ProjectID],
+			"title":        c.Task.Title,
+		})
+	}
+	data, _ := json.Marshal(map[string]interface{}{
+		"error":      "ambiguous task id",
+		"prefix":     ae.Prefix,
+		"candidates": cands,
+	})
+	return string(data), true
+}
+
+// marshalTaskWithResolve emits the task JSON, adding a resolved_from_project_id
+// field when the ref was resolved from a different project than the caller's
+// hint (so the agent can pass that PID next time and skip the cross-project
+// scan).
+func marshalTaskWithResolve(ref *taskRef) string {
+	if ref == nil || ref.Task == nil {
+		return `{"error": "nil task ref"}`
+	}
+	if !ref.ResolvedFromOverride {
+		d, _ := json.Marshal(ref.Task)
+		return string(d)
+	}
+	d, _ := json.Marshal(&struct {
+		*models.Task
+		ResolvedFromProjectID string `json:"resolved_from_project_id"`
+	}{Task: ref.Task, ResolvedFromProjectID: ref.ProjectID})
+	return string(d)
+}
+
 // coerceInt parses an integer argument received over MCP. The schema advertises
 // "number", but real clients (especially when the field sits at the top level
 // of a tool call) sometimes serialise it as a string. Accept float64, int,
@@ -3185,6 +3527,370 @@ func coerceInt(v interface{}, def int) int {
 		}
 	}
 	return def
+}
+
+// listTasksMaxBytes caps segments_list_tasks responses so full bodies don't
+// blow past Claude Code's tool-result token budget on large projects. When the
+// marshalled payload exceeds this, the handler drops items from the tail until
+// the wrapped object fits, and advertises truncated=true so the agent can
+// narrow.
+const listTasksMaxBytes = 50 * 1024
+
+// compactTask is the reduced shape returned by segments_list_tasks when
+// fields=compact (the default). Drops Body and CreatedAt; keeps everything a
+// ready-queue scan needs.
+type compactTask struct {
+	ID        string            `json:"id"`
+	Title     string            `json:"title"`
+	Status    models.TaskStatus `json:"status"`
+	Priority  int               `json:"priority"`
+	BlockedBy string            `json:"blocked_by,omitempty"`
+	ClosedAt  *time.Time        `json:"closed_at,omitempty"`
+	UpdatedAt time.Time         `json:"updated_at"`
+}
+
+func toCompact(t models.Task) compactTask {
+	return compactTask{
+		ID:        t.ID,
+		Title:     t.Title,
+		Status:    t.Status,
+		Priority:  t.Priority,
+		BlockedBy: t.BlockedBy,
+		ClosedAt:  t.ClosedAt,
+		UpdatedAt: t.UpdatedAt,
+	}
+}
+
+// parseSince turns a since= argument into an absolute cutoff time. Accepts
+// RFC3339 timestamps and durations. "Nd" is recognised explicitly (Go's
+// time.ParseDuration rejects days) in addition to standard h/m/s.
+func parseSince(now time.Time, s string) (time.Time, error) {
+	if s == "" {
+		return time.Time{}, nil
+	}
+	if strings.HasSuffix(s, "d") {
+		if days, err := strconv.Atoi(strings.TrimSuffix(s, "d")); err == nil && days >= 0 {
+			return now.Add(-time.Duration(days) * 24 * time.Hour), nil
+		}
+	}
+	if d, err := time.ParseDuration(s); err == nil && d >= 0 {
+		return now.Add(-d), nil
+	}
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t, nil
+	}
+	return time.Time{}, fmt.Errorf("invalid since=%q: expected RFC3339 date or duration like 7d, 24h, 30m", s)
+}
+
+// renderListTasks applies the status/since filters, ordering, limit, fields
+// projection, and 50KB size guard. Kept out of callTool so the logic is
+// testable in isolation and the tool-dispatch switch stays compact.
+func renderListTasks(list []models.Task, args map[string]interface{}) string {
+	str := func(key string) string { v, _ := args[key].(string); return v }
+	errMsg := func(err error) string {
+		d, _ := json.Marshal(map[string]string{"error": err.Error()})
+		return string(d)
+	}
+
+	statusFilter := str("status")
+	isDoneOrClosed := statusFilter == "done" || statusFilter == "closed"
+
+	if statusFilter != "" {
+		filtered := make([]models.Task, 0, len(list))
+		for _, t := range list {
+			if string(t.Status) == statusFilter {
+				filtered = append(filtered, t)
+			}
+		}
+		list = filtered
+	}
+
+	if sinceStr := str("since"); sinceStr != "" {
+		cutoff, perr := parseSince(time.Now(), sinceStr)
+		if perr != nil {
+			return errMsg(perr)
+		}
+		filtered := make([]models.Task, 0, len(list))
+		for _, t := range list {
+			ts := t.UpdatedAt
+			if isDoneOrClosed && t.ClosedAt != nil {
+				ts = *t.ClosedAt
+			}
+			if !ts.Before(cutoff) {
+				filtered = append(filtered, t)
+			}
+		}
+		list = filtered
+	}
+
+	orderBy := str("order_by")
+	if orderBy == "" {
+		if isDoneOrClosed {
+			orderBy = "closed_at_desc"
+		} else {
+			orderBy = "updated_at_desc"
+		}
+	}
+	switch orderBy {
+	case "updated_at_desc":
+		sort.Slice(list, func(i, j int) bool { return list[i].UpdatedAt.After(list[j].UpdatedAt) })
+	case "closed_at_desc":
+		sort.Slice(list, func(i, j int) bool {
+			ai, aj := list[i].ClosedAt, list[j].ClosedAt
+			switch {
+			case ai == nil && aj == nil:
+				return list[i].UpdatedAt.After(list[j].UpdatedAt)
+			case ai == nil:
+				return false
+			case aj == nil:
+				return true
+			default:
+				return ai.After(*aj)
+			}
+		})
+	case "sort_order_asc":
+		sort.Slice(list, func(i, j int) bool { return list[i].SortOrder < list[j].SortOrder })
+	default:
+		return errMsg(fmt.Errorf("invalid order_by=%q: expected updated_at_desc|closed_at_desc|sort_order_asc", orderBy))
+	}
+
+	total := len(list)
+
+	limit := 50
+	if v, ok := args["limit"]; ok {
+		limit = coerceInt(v, 50)
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit < len(list) {
+		list = list[:limit]
+	}
+
+	fields := str("fields")
+	if fields == "" {
+		fields = "compact"
+	}
+	if fields != "compact" && fields != "full" {
+		return errMsg(fmt.Errorf("invalid fields=%q: expected compact|full", fields))
+	}
+
+	build := func(n int, wrap bool) []byte {
+		var items interface{}
+		if fields == "compact" {
+			c := make([]compactTask, n)
+			for i := 0; i < n; i++ {
+				c[i] = toCompact(list[i])
+			}
+			items = c
+		} else {
+			items = list[:n]
+		}
+		if wrap {
+			d, _ := json.Marshal(map[string]interface{}{
+				"tasks":     items,
+				"truncated": true,
+				"returned":  n,
+				"total":     total,
+				"hint":      "Narrow with since=, fields=compact, or limit=.",
+			})
+			return d
+		}
+		d, _ := json.Marshal(items)
+		return d
+	}
+
+	payload := build(len(list), false)
+	if len(payload) > listTasksMaxBytes {
+		n := len(list)
+		for n > 0 {
+			n--
+			payload = build(n, true)
+			if len(payload) <= listTasksMaxBytes || n == 0 {
+				break
+			}
+		}
+	}
+	return string(payload)
+}
+
+// recentTask is the row shape returned by segments_recent. Compact by design --
+// body is never emitted, only a one-line summary derived from its first
+// non-empty line.
+type recentTask struct {
+	ID          string            `json:"id"`
+	Title       string            `json:"title"`
+	Status      models.TaskStatus `json:"status"`
+	Priority    int               `json:"priority"`
+	ClosedAt    *time.Time        `json:"closed_at,omitempty"`
+	Summary     string            `json:"summary,omitempty"`
+	ProjectID   string            `json:"project_id,omitempty"`
+	ProjectName string            `json:"project_name,omitempty"`
+}
+
+// filterRecentEntries keeps only done/closed entries, drops anything older than
+// the cutoff (zero cutoff means no filter), sorts closed_at desc with
+// updated_at as a fallback when ClosedAt is nil, then truncates to limit
+// (non-positive limit means no cap). Shared by segments_recent (MCP) and
+// sg recent (CLI) so both stay in lockstep.
+func filterRecentEntries(entries []recentEntry, cutoff time.Time, limit int) []recentEntry {
+	out := make([]recentEntry, 0, len(entries))
+	for _, e := range entries {
+		if e.Task.Status != models.StatusDone && e.Task.Status != models.StatusClosed {
+			continue
+		}
+		if !cutoff.IsZero() {
+			ts := e.Task.UpdatedAt
+			if e.Task.ClosedAt != nil {
+				ts = *e.Task.ClosedAt
+			}
+			if ts.Before(cutoff) {
+				continue
+			}
+		}
+		out = append(out, e)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		ai, aj := out[i].Task.ClosedAt, out[j].Task.ClosedAt
+		switch {
+		case ai == nil && aj == nil:
+			return out[i].Task.UpdatedAt.After(out[j].Task.UpdatedAt)
+		case ai == nil:
+			return false
+		case aj == nil:
+			return true
+		default:
+			return ai.After(*aj)
+		}
+	})
+	if limit > 0 && limit < len(out) {
+		out = out[:limit]
+	}
+	return out
+}
+
+// relativeAgo renders a closed/updated timestamp as "<age> ago" using the
+// existing humanAge formatter, or empty string for the zero time.
+func relativeAgo(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return humanAge(time.Since(t)) + " ago"
+}
+
+// summaryFromBody returns the first non-empty line of body, trimmed and capped
+// at 120 chars. Empty body -> empty string (summary field is omitted on wire).
+func summaryFromBody(body string) string {
+	for _, line := range strings.Split(body, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if len(line) > 120 {
+			line = line[:120]
+		}
+		return line
+	}
+	return ""
+}
+
+// renderRecentTasks builds the segments_recent response. The caller has already
+// collected tasks from one or all projects and tagged each with its project
+// name. Filters to status in {done, closed}, applies optional since cutoff,
+// orders by closed_at desc (falling back to updated_at when ClosedAt is nil),
+// truncates to limit (default 10).
+type recentEntry struct {
+	Task        models.Task
+	ProjectID   string
+	ProjectName string
+}
+
+func renderRecentTasks(entries []recentEntry, args map[string]interface{}) string {
+	str := func(key string) string { v, _ := args[key].(string); return v }
+	errMsg := func(err error) string {
+		d, _ := json.Marshal(map[string]string{"error": err.Error()})
+		return string(d)
+	}
+
+	var cutoff time.Time
+	if sinceStr := str("since"); sinceStr != "" {
+		c, perr := parseSince(time.Now(), sinceStr)
+		if perr != nil {
+			return errMsg(perr)
+		}
+		cutoff = c
+	}
+
+	limit := 10
+	if v, ok := args["limit"]; ok {
+		limit = coerceInt(v, 10)
+	}
+	if limit <= 0 {
+		limit = 10
+	}
+	entries = filterRecentEntries(entries, cutoff, limit)
+
+	rows := make([]recentTask, len(entries))
+	for i, e := range entries {
+		rows[i] = recentTask{
+			ID:          e.Task.ID,
+			Title:       e.Task.Title,
+			Status:      e.Task.Status,
+			Priority:    e.Task.Priority,
+			ClosedAt:    e.Task.ClosedAt,
+			Summary:     summaryFromBody(e.Task.Body),
+			ProjectID:   e.ProjectID,
+			ProjectName: e.ProjectName,
+		}
+	}
+	d, _ := json.Marshal(rows)
+	return string(d)
+}
+
+// collectRecentEntries pulls tasks from one or all projects, tagging each with
+// its project name so renderRecentTasks can disambiguate. If hint is empty,
+// iterates every project; otherwise resolves the hint to a single project.
+func collectRecentEntries(s *store.Store, hint string) ([]recentEntry, error) {
+	projects, err := s.ListProjects()
+	if err != nil {
+		return nil, err
+	}
+	if hint != "" {
+		pid, err := resolveProjectIDForMCP(s, hint)
+		if err != nil {
+			return nil, err
+		}
+		var chosen *models.Project
+		for i := range projects {
+			if projects[i].ID == pid {
+				chosen = &projects[i]
+				break
+			}
+		}
+		if chosen == nil {
+			return nil, fmt.Errorf("project %s vanished after resolution", pid)
+		}
+		tasks, err := s.ListTasks(pid)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]recentEntry, len(tasks))
+		for i, t := range tasks {
+			out[i] = recentEntry{Task: t, ProjectID: chosen.ID, ProjectName: chosen.Name}
+		}
+		return out, nil
+	}
+	var out []recentEntry
+	for _, p := range projects {
+		tasks, err := s.ListTasks(p.ID)
+		if err != nil {
+			return nil, err
+		}
+		for _, t := range tasks {
+			out = append(out, recentEntry{Task: t, ProjectID: p.ID, ProjectName: p.Name})
+		}
+	}
+	return out, nil
 }
 
 func callTool(s *store.Store, tool string, args map[string]interface{}) string {
@@ -3227,16 +3933,7 @@ func callTool(s *store.Store, tool string, args map[string]interface{}) string {
 		if err != nil {
 			return errMsg(err)
 		}
-		if filter := str("status"); filter != "" {
-			var filtered []models.Task
-			for _, t := range list {
-				if string(t.Status) == filter {
-					filtered = append(filtered, t)
-				}
-			}
-			list = filtered
-		}
-		return marshal(list)
+		return renderListTasks(list, args)
 	case "segments_create_task":
 		pid, err := resolveProjectIDForMCP(s, str("project_id"))
 		if err != nil {
@@ -3311,23 +4008,22 @@ func callTool(s *store.Store, tool string, args map[string]interface{}) string {
 		notify("tasks:created", created)
 		return marshal(created)
 	case "segments_update_task":
-		pid, err := resolveProjectIDForMCP(s, str("project_id"))
+		ref, err := resolveTaskRef(s, str("project_id"), str("task_id"))
 		if err != nil {
+			if out, ok := emitAmbigTaskErr(s, err); ok {
+				return out
+			}
 			return errMsg(err)
 		}
 		status := models.TaskStatus(str("status"))
 		priority := intArg("priority", -1)
-		t, err := s.UpdateTask(pid, str("task_id"), str("title"), str("body"), status, priority, str("blocked_by"))
+		t, err := s.UpdateTask(ref.ProjectID, ref.Task.ID, str("title"), str("body"), status, priority, str("blocked_by"))
 		if err != nil {
 			return errMsg(err)
 		}
 		notify("task:updated", t)
-		return marshal(t)
+		return marshalTaskWithResolve(&taskRef{Task: t, ProjectID: ref.ProjectID, ResolvedFromOverride: ref.ResolvedFromOverride})
 	case "segments_update_tasks":
-		pid, err := resolveProjectIDForMCP(s, str("project_id"))
-		if err != nil {
-			return errMsg(err)
-		}
 		raw, ok := args["updates"].([]interface{})
 		if !ok {
 			if updatesStr, isStr := args["updates"].(string); isStr {
@@ -3339,7 +4035,8 @@ func callTool(s *store.Store, tool string, args map[string]interface{}) string {
 		if len(raw) == 0 {
 			return errMsg(fmt.Errorf("updates must be a non-empty JSON array of {task_id, title?, body?, status?, priority?, blocked_by?} objects"))
 		}
-		updated := make([]*models.Task, 0, len(raw))
+		hintPID := str("project_id")
+		updated := make([]json.RawMessage, 0, len(raw))
 		for i, item := range raw {
 			obj, ok := item.(map[string]interface{})
 			if !ok {
@@ -3348,6 +4045,13 @@ func callTool(s *store.Store, tool string, args map[string]interface{}) string {
 			taskID, _ := obj["task_id"].(string)
 			if taskID == "" {
 				return errMsg(fmt.Errorf("updates[%d].task_id is required", i))
+			}
+			ref, err := resolveTaskRef(s, hintPID, taskID)
+			if err != nil {
+				if out, ok := emitAmbigTaskErr(s, err); ok {
+					return out
+				}
+				return errMsg(fmt.Errorf("updates[%d]: %v", i, err))
 			}
 			title, _ := obj["title"].(string)
 			body, _ := obj["body"].(string)
@@ -3360,30 +4064,31 @@ func callTool(s *store.Store, tool string, args map[string]interface{}) string {
 				priority = coerceInt(p, -1)
 			}
 			blockedBy, _ := obj["blocked_by"].(string)
-			t, err := s.UpdateTask(pid, taskID, title, body, status, priority, blockedBy)
+			t, err := s.UpdateTask(ref.ProjectID, ref.Task.ID, title, body, status, priority, blockedBy)
 			if err != nil {
 				return errMsg(fmt.Errorf("updates[%d]: %v", i, err))
 			}
 			notify("task:updated", t)
-			updated = append(updated, t)
+			updated = append(updated, json.RawMessage(marshalTaskWithResolve(&taskRef{Task: t, ProjectID: ref.ProjectID, ResolvedFromOverride: ref.ResolvedFromOverride})))
 		}
 		return marshal(updated)
 	case "segments_delete_task":
-		pid, err := resolveProjectIDForMCP(s, str("project_id"))
+		ref, err := resolveTaskRef(s, str("project_id"), str("task_id"))
 		if err != nil {
+			if out, ok := emitAmbigTaskErr(s, err); ok {
+				return out
+			}
 			return errMsg(err)
 		}
-		taskID := str("task_id")
-		if err := s.DeleteTask(pid, taskID); err != nil {
+		if err := s.DeleteTask(ref.ProjectID, ref.Task.ID); err != nil {
 			return errMsg(err)
 		}
-		notify("task:deleted", map[string]string{"id": taskID, "project_id": pid})
+		notify("task:deleted", map[string]string{"id": ref.Task.ID, "project_id": ref.ProjectID})
+		if ref.ResolvedFromOverride {
+			return marshal(map[string]interface{}{"deleted": true, "resolved_from_project_id": ref.ProjectID})
+		}
 		return `{"deleted": true}`
 	case "segments_delete_tasks":
-		pid, err := resolveProjectIDForMCP(s, str("project_id"))
-		if err != nil {
-			return errMsg(err)
-		}
 		raw, ok := args["task_ids"].([]interface{})
 		if !ok {
 			if idsStr, isStr := args["task_ids"].(string); isStr {
@@ -3395,29 +4100,46 @@ func callTool(s *store.Store, tool string, args map[string]interface{}) string {
 		if len(raw) == 0 {
 			return errMsg(fmt.Errorf("task_ids must be a non-empty JSON array of strings"))
 		}
-		deleted := make([]string, 0, len(raw))
+		hintPID := str("project_id")
+		deleted := make([]map[string]string, 0, len(raw))
 		for i, item := range raw {
 			taskID, ok := item.(string)
 			if !ok || taskID == "" {
 				return errMsg(fmt.Errorf("task_ids[%d] must be a non-empty string", i))
 			}
-			if err := s.DeleteTask(pid, taskID); err != nil {
+			ref, err := resolveTaskRef(s, hintPID, taskID)
+			if err != nil {
+				if out, ok := emitAmbigTaskErr(s, err); ok {
+					return out
+				}
 				return errMsg(fmt.Errorf("task_ids[%d]: %v", i, err))
 			}
-			notify("task:deleted", map[string]string{"id": taskID, "project_id": pid})
-			deleted = append(deleted, taskID)
+			if err := s.DeleteTask(ref.ProjectID, ref.Task.ID); err != nil {
+				return errMsg(fmt.Errorf("task_ids[%d]: %v", i, err))
+			}
+			notify("task:deleted", map[string]string{"id": ref.Task.ID, "project_id": ref.ProjectID})
+			entry := map[string]string{"id": ref.Task.ID, "project_id": ref.ProjectID}
+			if ref.ResolvedFromOverride {
+				entry["resolved_from_project_id"] = ref.ProjectID
+			}
+			deleted = append(deleted, entry)
 		}
 		return marshal(map[string]interface{}{"deleted": deleted})
 	case "segments_get_task":
-		pid, err := resolveProjectIDForMCP(s, str("project_id"))
+		ref, err := resolveTaskRef(s, str("project_id"), str("task_id"))
+		if err != nil {
+			if out, ok := emitAmbigTaskErr(s, err); ok {
+				return out
+			}
+			return errMsg(err)
+		}
+		return marshalTaskWithResolve(ref)
+	case "segments_recent":
+		entries, err := collectRecentEntries(s, str("project_id"))
 		if err != nil {
 			return errMsg(err)
 		}
-		t, err := s.GetTask(pid, str("task_id"))
-		if err != nil {
-			return errMsg(err)
-		}
-		return marshal(t)
+		return renderRecentTasks(entries, args)
 	default:
 		return `{"error": "unknown tool"}`
 	}

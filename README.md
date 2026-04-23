@@ -200,11 +200,16 @@ The Claude Code integration exposes MCP tools for creating, updating, listing, a
 
 ### Claude Code: avoiding first-call friction
 
-Claude Code defers non-critical MCP tool schemas behind its `ToolSearch` lazy-loader. Because Segments is cross-session infrastructure (instructions ship with "use proactively, without being asked"), paying a schema round-trip on the first tool call of every session is exactly the wrong trade-off -- it's the moment the model is most likely to fall back to `TodoWrite` and silently lose cross-session continuity.
+Claude Code defers MCP tool schemas behind its `ToolSearch` lazy-loader by default -- schemas aren't loaded until the model searches for them, which adds a round-trip on the first Segments call of every session. Because Segments is cross-session infrastructure, that round-trip is exactly where the model is most likely to fall back to `TodoWrite` and silently lose continuity.
 
-`sg setup` handles this for you. On the Claude Code path it writes three things into the settings.json for the chosen scope (`~/.claude/settings.json` global, or `.claude/settings.json` local):
+Two orthogonal controls help:
 
-1. The SessionStart hook (`segments context`) -- also emits a `ToolSearch select:mcp__segments__*` pre-load hint so Claude loads schemas on its first tool call.
+- **Schema loading** is controlled by the `ENABLE_TOOL_SEARCH` env var. Set `ENABLE_TOOL_SEARCH=false` in Claude Code's environment to load all MCP tool schemas upfront (no deferral, no ToolSearch needed). This is the only knob that actually flips inline-vs-deferred loading. It applies to every MCP server on the host. Claude Code also reads it from `settings.json` under `env`.
+- **Permission prompts** are controlled by `permissions.allow`. A `"mcp__segments"` entry there pre-authorizes every Segments tool so no "allow this tool?" prompt fires on first use. This does NOT affect schema loading -- the schemas can still be deferred.
+
+`sg setup` writes three things into the settings.json for the chosen scope (`~/.claude/settings.json` global, or `.claude/settings.json` local):
+
+1. The SessionStart hook (`segments context`) -- emits a compact `segmentsContext` banner plus the per-project ready queue so the agent can orient without any tool call. The MCP server's `serverInstructions` carries the stable "how to use Segments" prose (including a `ToolSearch select:mcp__segments__*` pre-load line for sessions where schemas are deferred).
 2. A `permissions.allow` entry for `mcp__segments` -- preauthorizes every Segments tool, so no permission prompts on first use.
 3. The MCP server registration (via `claude mcp add` for global, or `.mcp.json` for local).
 
@@ -212,6 +217,7 @@ If you prefer to wire it up by hand, the equivalent `settings.json` snippet is:
 
 ```json
 {
+  "env": { "ENABLE_TOOL_SEARCH": "false" },
   "permissions": { "allow": ["mcp__segments"] },
   "hooks": {
     "SessionStart": [
@@ -221,7 +227,7 @@ If you prefer to wire it up by hand, the equivalent `settings.json` snippet is:
 }
 ```
 
-As a last resort you can set `ENABLE_TOOL_SEARCH=false` in Claude Code's environment to disable schema deferral globally, but that affects every MCP server on your machine; the allowlist approach is more surgical.
+The `env` line is optional -- leaving it out means Segments schemas stay deferred until the ToolSearch pre-load line fires on first use.
 
 ## Configuration
 
@@ -231,6 +237,10 @@ Config lives at `~/.segments/config.yaml` (override the directory with `$SEGMENT
 port: "8765"
 bind: "127.0.0.1"
 data_dir: "~/.segments"
+
+# session_start_inject: true   # append a segmentsContext banner to `sg context`
+                               # output (CWD-resolved project, in-progress, recently
+                               # closed). Set false to emit only the legacy listing.
 
 # jsonl_export:
 #   enabled: true

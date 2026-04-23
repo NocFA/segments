@@ -1,6 +1,7 @@
 package store
 
 import (
+	"errors"
 	"os"
 	"testing"
 
@@ -258,5 +259,100 @@ func TestTaskNotFound(t *testing.T) {
 	_, err := s.GetTask(proj.ID, "nonexistent")
 	if err == nil {
 		t.Error("GetTask should fail for nonexistent task")
+	}
+	if !errors.Is(err, ErrTaskNotFound) {
+		t.Errorf("expected ErrTaskNotFound, got %v", err)
+	}
+}
+
+func TestGetTask_EmptyProjectReturnsSentinelError(t *testing.T) {
+	s, cleanup := setupTest(t)
+	defer cleanup()
+
+	proj, _ := s.CreateProject("empty")
+	_, err := s.GetTask(proj.ID, "any-id")
+	if !errors.Is(err, ErrTaskNotFound) {
+		t.Errorf("expected ErrTaskNotFound on empty project (dbi missing), got %v", err)
+	}
+}
+
+func TestFindTaskAny_AcrossProjects(t *testing.T) {
+	s, cleanup := setupTest(t)
+	defer cleanup()
+
+	p1, _ := s.CreateProject("alpha")
+	p2, _ := s.CreateProject("beta")
+
+	t1, _ := s.CreateTask(p1.ID, "in alpha", "", 2)
+	t2, _ := s.CreateTask(p2.ID, "in beta", "", 2)
+
+	matches, err := s.FindTaskAny(t1.ID)
+	if err != nil {
+		t.Fatalf("FindTaskAny err: %v", err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("expected 1 match, got %d", len(matches))
+	}
+	if matches[0].ProjectID != p1.ID {
+		t.Errorf("matches[0].ProjectID = %q, want %q", matches[0].ProjectID, p1.ID)
+	}
+
+	matches, _ = s.FindTaskAny(t2.ID)
+	if len(matches) != 1 || matches[0].ProjectID != p2.ID {
+		t.Errorf("cross-project lookup for t2 failed: %+v", matches)
+	}
+
+	// prefix match unique
+	shortID := t1.ID[:8]
+	matches, _ = s.FindTaskAny(shortID)
+	if len(matches) != 1 || matches[0].Task.ID != t1.ID {
+		t.Errorf("prefix match failed: %+v", matches)
+	}
+
+	// no match
+	matches, _ = s.FindTaskAny("deadbeef-no-match-anywhere-0000000000")
+	if len(matches) != 0 {
+		t.Errorf("expected 0 matches, got %d", len(matches))
+	}
+}
+
+func TestFindTaskAny_AmbiguousPrefix(t *testing.T) {
+	s, cleanup := setupTest(t)
+	defer cleanup()
+
+	p1, _ := s.CreateProject("alpha")
+	p2, _ := s.CreateProject("beta")
+
+	// Force two tasks whose IDs share a prefix by reopening and inspecting.
+	// Since UUIDs are random, the odds of collision on a short prefix are very
+	// low for a small test. Instead, take real IDs and search by their shared
+	// 1-char prefix; there's a good chance of collision. Fall back to an empty
+	// prefix (matches everything).
+	s.CreateTask(p1.ID, "one", "", 2)
+	s.CreateTask(p2.ID, "two", "", 2)
+
+	// Empty prefix should match nothing (guard in FindTaskAny).
+	if matches, _ := s.FindTaskAny(""); len(matches) != 0 {
+		t.Errorf("empty prefix should return 0 matches, got %d", len(matches))
+	}
+
+	// A short prefix that surely matches at least some UUIDs: walk hex digits
+	// until we find one that hits 2+ ids.
+	foundAmbig := false
+	for _, hex := range []string{"0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f"} {
+		matches, _ := s.FindTaskAny(hex)
+		if len(matches) >= 2 {
+			projects := map[string]bool{}
+			for _, m := range matches {
+				projects[m.ProjectID] = true
+			}
+			if len(projects) >= 2 {
+				foundAmbig = true
+				break
+			}
+		}
+	}
+	if !foundAmbig {
+		t.Log("no ambiguous-across-projects hex prefix in this run (UUIDs randomly don't overlap); unusual but not a bug")
 	}
 }

@@ -29,8 +29,13 @@ type Config struct {
 	// Analytics is a tri-state opt-out for the local event log at
 	// ~/.segments/events.jsonl. Unset (nil) defaults to enabled; set to
 	// false in config.yaml to disable, or use SEGMENTS_ANALYTICS=0.
-	Analytics *bool  `yaml:"analytics" json:"analytics,omitempty"`
-	Version   string `yaml:"-" json:"version,omitempty"`
+	Analytics *bool `yaml:"analytics" json:"analytics,omitempty"`
+	// SessionStartInject is a tri-state opt-out for the segmentsContext
+	// block that `segments context` appends for SessionStart hooks. Unset
+	// (nil) defaults to enabled; set to false to keep only the legacy
+	// project/tasks listing.
+	SessionStartInject *bool  `yaml:"session_start_inject" json:"session_start_inject,omitempty"`
+	Version            string `yaml:"-" json:"version,omitempty"`
 }
 
 type Server struct {

@@ -2,8 +2,10 @@ package store
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -11,6 +13,13 @@ import (
 	"github.com/bmatsuo/lmdb-go/lmdb"
 	"github.com/google/uuid"
 )
+
+var ErrTaskNotFound = errors.New("task not found")
+
+type TaskMatch struct {
+	Task      *models.Task
+	ProjectID string
+}
 
 type Store struct {
 	basePath string
@@ -294,11 +303,17 @@ func (s *Store) GetTask(projectID, taskID string) (*models.Task, error) {
 	err = env.View(func(txn *lmdb.Txn) error {
 		dbi, err := txn.OpenDBI("tasks", 0)
 		if err != nil {
+			if lmdb.IsNotFound(err) {
+				return ErrTaskNotFound
+			}
 			return err
 		}
 
 		data, err := txn.Get(dbi, []byte(taskID))
 		if err != nil {
+			if lmdb.IsNotFound(err) {
+				return ErrTaskNotFound
+			}
 			return err
 		}
 
@@ -310,6 +325,30 @@ func (s *Store) GetTask(projectID, taskID string) (*models.Task, error) {
 	}
 
 	return &task, nil
+}
+
+// FindTaskAny scans every project for tasks whose ID equals or is prefixed by
+// idOrPrefix. Returns all matches so callers can decide how to handle 0, 1, or
+// many (ambiguous prefix).
+func (s *Store) FindTaskAny(idOrPrefix string) ([]TaskMatch, error) {
+	if idOrPrefix == "" {
+		return nil, nil
+	}
+	projects, err := s.ListProjects()
+	if err != nil {
+		return nil, err
+	}
+	var matches []TaskMatch
+	for _, p := range projects {
+		tasks, _ := s.ListTasks(p.ID)
+		for i := range tasks {
+			if strings.HasPrefix(tasks[i].ID, idOrPrefix) {
+				t := tasks[i]
+				matches = append(matches, TaskMatch{Task: &t, ProjectID: p.ID})
+			}
+		}
+	}
+	return matches, nil
 }
 
 func (s *Store) ListAllTasks() ([]models.Task, error) {
