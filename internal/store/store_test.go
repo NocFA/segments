@@ -178,7 +178,16 @@ func TestUpdateTask(t *testing.T) {
 	proj, _ := s.CreateProject("test-project")
 	created, _ := s.CreateTask(proj.ID, "original", "body", 0)
 
-	updated, err := s.UpdateTask(proj.ID, created.ID, "updated", "new body", models.StatusInProgress, 1, "")
+	title := "updated"
+	body := "new body"
+	status := models.StatusInProgress
+	priority := 1
+	updated, err := s.UpdateTask(proj.ID, created.ID, TaskPatch{
+		Title:    &title,
+		Body:     &body,
+		Status:   &status,
+		Priority: &priority,
+	})
 	if err != nil {
 		t.Fatalf("UpdateTask error: %v", err)
 	}
@@ -196,6 +205,75 @@ func TestUpdateTask(t *testing.T) {
 	}
 	if !updated.CreatedAt.Equal(created.CreatedAt) {
 		t.Error("CreatedAt should not change")
+	}
+}
+
+func TestUpdateTaskPatch_ClearsAndPreserves(t *testing.T) {
+	s, cleanup := setupTest(t)
+	defer cleanup()
+
+	proj, _ := s.CreateProject("p")
+	created, _ := s.CreateTask(proj.ID, "title", "body", 2)
+
+	blocker, _ := s.CreateTask(proj.ID, "blocker", "", 2)
+	blockers := []string{blocker.ID}
+	if _, err := s.UpdateTask(proj.ID, created.ID, TaskPatch{BlockedBy: &blockers}); err != nil {
+		t.Fatalf("seed blocked_by: %v", err)
+	}
+
+	empty := ""
+	cleared := []string{}
+	got, err := s.UpdateTask(proj.ID, created.ID, TaskPatch{BlockedBy: &cleared})
+	if err != nil {
+		t.Fatalf("clear blocked_by: %v", err)
+	}
+	if len(got.BlockedBy) != 0 {
+		t.Errorf("BlockedBy not cleared: %v", got.BlockedBy)
+	}
+	if got.Title != "title" || got.Body != "body" || got.Priority != 2 {
+		t.Errorf("unchanged fields mutated: %+v", got)
+	}
+
+	got, err = s.UpdateTask(proj.ID, created.ID, TaskPatch{Title: &empty})
+	if err != nil {
+		t.Fatalf("clear title: %v", err)
+	}
+	if got.Title != "" {
+		t.Errorf("Title not cleared: %q", got.Title)
+	}
+
+	got, err = s.UpdateTask(proj.ID, created.ID, TaskPatch{Body: &empty})
+	if err != nil {
+		t.Fatalf("clear body: %v", err)
+	}
+	if got.Body != "" {
+		t.Errorf("Body not cleared: %q", got.Body)
+	}
+
+	got, err = s.UpdateTask(proj.ID, created.ID, TaskPatch{})
+	if err != nil {
+		t.Fatalf("nil patch: %v", err)
+	}
+	if got.Priority != 2 {
+		t.Errorf("Priority preserved expected 2, got %d", got.Priority)
+	}
+
+	zero := 0
+	got, err = s.UpdateTask(proj.ID, created.ID, TaskPatch{Priority: &zero})
+	if err != nil {
+		t.Fatalf("set priority zero: %v", err)
+	}
+	if got.Priority != 0 {
+		t.Errorf("Priority not set to zero: %d", got.Priority)
+	}
+
+	blank := models.TaskStatus("")
+	got, err = s.UpdateTask(proj.ID, created.ID, TaskPatch{Status: &blank})
+	if err != nil {
+		t.Fatalf("clear status: %v", err)
+	}
+	if got.Status != "" {
+		t.Errorf("Status not cleared: %q", got.Status)
 	}
 }
 

@@ -40,6 +40,31 @@ kbd {
   background: var(--seg-surface);
 }
 
+.ready-banner {
+  display: flex; align-items: center; gap: 12px;
+  padding: 8px 16px;
+  font-size: 11.5px;
+  color: var(--seg-muted);
+  background: var(--seg-surface);
+  border-bottom: 1px solid var(--seg-line);
+}
+.ready-banner.expanded { border-left: 2px solid var(--seg-accent); }
+.ready-banner.strict   { border-left: 2px solid var(--seg-done); }
+.ready-banner-text { flex: 1; }
+.ready-banner-toggle {
+  font-size: 11px;
+  color: var(--seg-accent);
+  padding: 3px 8px;
+  border: 1px solid var(--seg-line2);
+  border-radius: 3px;
+  background: transparent;
+}
+.ready-banner-toggle:hover {
+  color: var(--seg-text);
+  border-color: var(--seg-accent);
+  background: var(--seg-accent-dim);
+}
+
 /* ===== Obsidian theme (Direction A) ===== */
 body[data-theme="obsidian"] {
   --seg-bg: #0e1012;
@@ -992,6 +1017,8 @@ body[data-theme="console"] .list-group-header.g-blocker     { color: var(--seg-b
 body[data-theme="console"] .list-group-header.g-todo        { color: var(--seg-todo); }
 body[data-theme="console"] .list-group-header.g-done        { color: var(--seg-done); }
 body[data-theme="console"] .list-group-header.g-closed      { color: var(--seg-closed); }
+body[data-theme="console"] .list-group-header.g-ready       { color: var(--seg-done); }
+body[data-theme="console"] .list-group-header.g-blocked     { color: var(--seg-blocker); }
 
 body[data-theme="console"] .row {
   display: grid;
@@ -1807,6 +1834,8 @@ body[data-theme="dossier"] .list-group-header.g-in_progress { color: var(--seg-i
 body[data-theme="dossier"] .list-group-header.g-blocker     { color: var(--seg-blocker); }
 body[data-theme="dossier"] .list-group-header.g-done        { color: var(--seg-done); }
 body[data-theme="dossier"] .list-group-header.g-closed      { color: var(--seg-closed); }
+body[data-theme="dossier"] .list-group-header.g-ready       { color: var(--seg-done); }
+body[data-theme="dossier"] .list-group-header.g-blocked     { color: var(--seg-blocker); }
 body[data-theme="dossier"] .list-group-header .glyph {
   font-size: 14px; margin-right: 8px;
 }
@@ -2670,6 +2699,7 @@ const Store = {
   view: loadPref('ui.view', 'list'),       // list | kanban | graph (persisted)
   search: '',
   filter: loadPref('ui.filter', null),     // null | 'ready' (persisted)
+  readyStrict: loadPref('ui.ready-strict', null) === 'true', // true = strict, false = widened (persisted)
   composerOpen: false,
   composerTitle: '',             // staged new-task title (survives re-render)
   composerBody: '',
@@ -2747,11 +2777,20 @@ const Util = {
     tasks.forEach(t => { if (c[t.status] !== undefined) c[t.status]++; });
     return c;
   },
+  blockers(t) {
+    if (!t || t.blocked_by == null) return [];
+    if (Array.isArray(t.blocked_by)) return t.blocked_by.filter(Boolean);
+    if (typeof t.blocked_by === 'string' && t.blocked_by) return [t.blocked_by];
+    return [];
+  },
   ready(tasks) {
     const byId = Object.fromEntries(tasks.map(t => [t.id, t]));
-    return tasks.filter(t =>
-      t.status === 'todo' && (!t.blocked_by || (byId[t.blocked_by] && byId[t.blocked_by].status === 'done'))
-    );
+    return tasks.filter(t => {
+      if (t.status !== 'todo') return false;
+      const ids = Util.blockers(t);
+      if (ids.length === 0) return true;
+      return ids.every(id => byId[id] && (byId[id].status === 'done' || byId[id].status === 'closed'));
+    });
   },
   readyTree(tasks) {
     return tasks.filter(t =>
@@ -3140,8 +3179,18 @@ const Actions = {
   toggleReadyFilter() {
     Store.filter = Store.filter === 'ready' ? null : 'ready';
     savePref('ui.filter', Store.filter);
+    if (Store.filter === 'ready') {
+      Store.readyStrict = false;
+      savePref('ui.ready-strict', 'false');
+    }
     Store.selectedId = null;
     Store.combo = null;
+    render();
+  },
+  toggleReadyStrict() {
+    Store.readyStrict = !Store.readyStrict;
+    savePref('ui.ready-strict', Store.readyStrict ? 'true' : 'false');
+    Store.selectedId = null;
     render();
   },
   openBlockerCombo(scope) {
@@ -3152,7 +3201,8 @@ const Actions = {
     let excludeId = null;
     if (scope === 'detail') {
       const t = Store.selectedId && Store.tasks.find(x => x.id === Store.selectedId);
-      currentId = t && t.blocked_by ? t.blocked_by : null;
+      const ids = Util.blockers(t);
+      currentId = ids.length ? ids[0] : null;
       excludeId = Store.selectedId;
     } else if (scope === 'composer') {
       currentId = Store.composerBlocker || null;
@@ -3229,7 +3279,7 @@ const Actions = {
     if (scope === 'detail') {
       const sel = Store.selectedId;
       render();
-      if (sel) await Actions.saveTaskEdit(sel, { blocked_by: id || '' });
+      if (sel) await Actions.saveTaskEdit(sel, { blocked_by: id ? [id] : [] });
       return;
     }
   },
@@ -3341,14 +3391,15 @@ const Actions = {
         title: title.trim(), body: (body || '').trim(), priority: priority | 0,
       });
       // Create endpoint doesn't accept blocked_by; chain a PUT if needed.
-      if (blockedBy && created && created.id) {
+      const blockers = Array.isArray(blockedBy) ? blockedBy.filter(Boolean) : (blockedBy ? [blockedBy] : []);
+      if (blockers.length && created && created.id) {
         await API.updateTask(created.id, {
           project_id: targetProject,
           title: created.title,
           body: created.body || '',
           status: created.status,
           priority: created.priority,
-          blocked_by: blockedBy,
+          blocked_by: blockers,
         });
       }
       Store.composerOpen = false;
@@ -3366,7 +3417,7 @@ const Actions = {
         body: patch.body !== undefined ? patch.body : t.body,
         status: patch.status !== undefined ? patch.status : t.status,
         priority: patch.priority !== undefined ? patch.priority : t.priority,
-        blocked_by: patch.blocked_by !== undefined ? patch.blocked_by : (t.blocked_by || ''),
+        blocked_by: patch.blocked_by !== undefined ? patch.blocked_by : Util.blockers(t),
       };
       await API.updateTask(id, payload);
       Store.editingBody = null; Store.editingTitle = null;
@@ -3396,7 +3447,9 @@ const Actions = {
 function filteredTasks() {
   let out = Store.tasks.slice();
   if (Store.filter === 'ready') {
-    out = Store.view === 'graph' ? Util.readyTree(out) : Util.ready(out);
+    if (Store.view === 'graph') out = Util.readyTree(out);
+    else if (Store.view === 'list' && !Store.readyStrict) out = Util.readyTree(out);
+    else out = Util.ready(out);
   }
   if (Store.search) out = Util.fuzzy(Store.search, out);
   return out;
@@ -3430,6 +3483,14 @@ function paletteItems() {
     label: Store.filter === 'ready' ? 'Clear ready filter' : 'Show only ready tasks',
     run: () => Actions.toggleReadyFilter(),
   });
+
+  if (Store.filter === 'ready') {
+    items.push({
+      type: 'filter',
+      label: Store.readyStrict ? 'Ready queue: expanded view (show in-progress + blocked)' : 'Ready queue: strict view (match AI)',
+      run: () => Actions.toggleReadyStrict(),
+    });
+  }
 
   items.push({
     type: 'mode',
@@ -3509,6 +3570,45 @@ function groupedByStatus(tasks) {
   return order.filter(s => buckets[s].length).map(s => ({ key: s, items: buckets[s] }));
 }
 
+function groupedReadyExpanded(tasks, byId) {
+  const ready = [], inProgress = [], blocked = [];
+  tasks.forEach(t => {
+    if (t.status === 'in_progress') { inProgress.push(t); return; }
+    if (t.status === 'blocker') { blocked.push(t); return; }
+    if (t.status !== 'todo') return;
+    const ids = Util.blockers(t);
+    const isReady = ids.length === 0 || ids.every(id => {
+      const b = byId[id];
+      return b && (b.status === 'done' || b.status === 'closed');
+    });
+    (isReady ? ready : blocked).push(t);
+  });
+  const out = [];
+  if (ready.length)      out.push({ key: 'ready',       label: 'Ready',       items: ready });
+  if (inProgress.length) out.push({ key: 'in_progress', label: 'In progress', items: inProgress });
+  if (blocked.length)    out.push({ key: 'blocked',     label: 'Blocked',     items: blocked });
+  return out;
+}
+
+function readyExpandedActive() {
+  return Store.filter === 'ready' && Store.view !== 'graph' && !Store.readyStrict;
+}
+
+function readyBannerHTML(strictCount) {
+  const strict = Store.readyStrict;
+  const plural = strictCount === 1 ? 'ready task' : 'ready tasks';
+  const text = strict
+    ? 'Strict view: matches the AI. ' + strictCount + ' ' + plural + '.'
+    : 'View expanded for you \u2014 AI sees only the ' + strictCount + ' ' + plural + '.';
+  const btn = strict ? 'Show expanded view' : 'Show strict view';
+  return '<div class="ready-banner ' + (strict ? 'strict' : 'expanded') + '" role="note">' +
+    '<span class="ready-banner-text">' + Util.esc(text) + '</span>' +
+    '<button class="ready-banner-toggle" data-act="toggle-ready-strict" type="button">' +
+      Util.esc(btn) +
+    '</button>' +
+  '</div>';
+}
+
 // Kanban uses a fixed left-to-right flow: intake -> active work -> stuck -> settled.
 // Closed tasks are terminal and not shown on the board; flip back to List to edit them.
 const KANBAN_COLS = ['todo', 'in_progress', 'blocker', 'done'];
@@ -3543,8 +3643,15 @@ const Graph = {
       if (seen.has(id)) return 0;
       seen.add(id);
       const t = byId[id];
-      const blk = t && t.blocked_by && inScope.has(t.blocked_by) ? t.blocked_by : null;
-      const r = blk ? 1 + visit(blk, seen) : 0;
+      let best = -1;
+      if (t) {
+        for (const bid of Util.blockers(t)) {
+          if (!inScope.has(bid)) continue;
+          const r = visit(bid, seen);
+          if (r > best) best = r;
+        }
+      }
+      const r = best >= 0 ? 1 + best : 0;
       rank[id] = r;
       return r;
     };
@@ -3584,14 +3691,15 @@ const Graph = {
     const height = (keys.length ? yCursor : padY) + padY - rankGap;
     return { pos: pos, W: W, H: H, width: width, height: height, ranks: keys.length };
   },
-  // edges: returns [{child, parent, blocked}] for tasks with blocked_by.
+  // Multi-blocker tasks produce one edge per parent.
   edges(tasks, byId) {
     const out = [];
     tasks.forEach(t => {
-      if (!t.blocked_by) return;
-      const parent = byId[t.blocked_by];
-      if (!parent) return;
-      out.push({ child: t, parent: parent, blocked: parent.status !== 'done' });
+      for (const bid of Util.blockers(t)) {
+        const parent = byId[bid];
+        if (!parent) continue;
+        out.push({ child: t, parent: parent, blocked: parent.status !== 'done' && parent.status !== 'closed' });
+      }
     });
     return out;
   },
@@ -3620,37 +3728,38 @@ const Graph = {
     const byId = {};
     tasks.forEach(t => { byId[t.id] = t; });
     tasks.forEach(t => {
-      if (!t.blocked_by) return;
-      const parent = byId[t.blocked_by];
-      if (!parent) return;
-      if (parent.status === 'done' || parent.status === 'closed') return;
       if (t.status === 'done' || t.status === 'closed') return;
-      m.set(parent.id, (m.get(parent.id) || 0) + 1);
+      for (const bid of Util.blockers(t)) {
+        const parent = byId[bid];
+        if (!parent) continue;
+        if (parent.status === 'done' || parent.status === 'closed') continue;
+        m.set(parent.id, (m.get(parent.id) || 0) + 1);
+      }
     });
     return m;
   },
-  // focusSet: returns a Set of task ids in the same connected component
-  // as `sel` (upstream blockers via blocked_by chain + downstream dependents,
-  // transitively). Returns null when there is no selection or it's out of scope.
-  // Each task has at most one blocked_by, so upstream is a single chain;
-  // downstream can branch.
   focusSet(sel, tasks, byId) {
     if (!sel || !byId[sel]) return null;
     const inScope = new Set(tasks.map(t => t.id));
     if (!inScope.has(sel)) return null;
     const childrenOf = {};
     tasks.forEach(t => {
-      const blk = t.blocked_by;
-      if (blk && inScope.has(blk)) {
-        (childrenOf[blk] = childrenOf[blk] || []).push(t.id);
+      for (const bid of Util.blockers(t)) {
+        if (inScope.has(bid)) {
+          (childrenOf[bid] = childrenOf[bid] || []).push(t.id);
+        }
       }
     });
     const focus = new Set();
-    let cur = sel;
-    while (cur && inScope.has(cur) && !focus.has(cur)) {
+    const upstream = [sel];
+    while (upstream.length) {
+      const cur = upstream.pop();
+      if (!cur || !inScope.has(cur) || focus.has(cur)) continue;
       focus.add(cur);
       const t = byId[cur];
-      cur = t && t.blocked_by;
+      for (const bid of Util.blockers(t)) {
+        if (inScope.has(bid) && !focus.has(bid)) upstream.push(bid);
+      }
     }
     const stack = [sel];
     while (stack.length) {
@@ -3854,8 +3963,7 @@ function obsKanbanView(T, tasks, byId) {
 }
 
 function obsKanbanCard(T, t, byId) {
-  const blocker = t.blocked_by ? byId[t.blocked_by] : null;
-  const unresolved = blocker && blocker.status !== 'done';
+  const bids = Util.blockers(t);
   const selected = Store.selectedId === t.id;
   const dragging = Store.dragging === t.id;
   const pulsing = Store.pulse[t.id] && Date.now() - Store.pulse[t.id] < 2000;
@@ -3871,10 +3979,14 @@ function obsKanbanCard(T, t, byId) {
     return '<span class="f' + i + ' ' + (i < filled ? 'on' : '') + '"></span>';
   }).join('');
 
-  const blockerChip = t.blocked_by
-    ? '<span class="blocker-chip ' + (unresolved ? 'unresolved' : '') + '" title="' + Util.esc(blocker ? blocker.title : t.blocked_by) + '">' +
-        (unresolved ? '\u2715 ' : '\u2713 ') + Util.esc(Util.shortId(t.blocked_by, 8)) +
-      '</span>'
+  const blockerChip = bids.length
+    ? bids.map(bid => {
+        const b = byId[bid];
+        const unres = !b || (b.status !== 'done' && b.status !== 'closed');
+        return '<span class="blocker-chip ' + (unres ? 'unresolved' : '') + '" title="' + Util.esc(b ? b.title : bid) + '">' +
+          (unres ? '\u2715 ' : '\u2713 ') + Util.esc(Util.shortId(bid, 8)) +
+        '</span>';
+      }).join(' ')
     : '<span></span>';
 
   return '<div class="' + classes.join(' ') + '" draggable="true" data-act="kanban-card" data-id="' + Util.esc(t.id) + '" aria-label="' + Util.esc(t.title) + '">' +
@@ -3965,21 +4077,36 @@ function obsGraphView(T, tasks, byId) {
 }
 
 function obsListView(T, tasks, byId) {
+  const showBanner = Store.filter === 'ready' && Store.view === 'list';
+  const banner = showBanner ? readyBannerHTML(Util.ready(Store.tasks).length) : '';
   if (!tasks.length) {
-    return '<div class="list"><div class="empty">' +
+    return '<div class="list">' + banner + '<div class="empty">' +
       (hasActiveScope() ? 'No tasks' + (Store.search ? ' match “' + Util.esc(Store.search) + '”' : '') + '. Press <kbd>c</kbd> to create.'
         : 'Select or create a project to get started.') +
     '</div></div>';
   }
-  const groups = groupedByStatus(tasks);
+  const expanded = readyExpandedActive();
+  const groups = expanded ? groupedReadyExpanded(tasks, byId) : groupedByStatus(tasks);
   const T_META = T.statusMeta;
+  const colorFor = k => {
+    if (k === 'in_progress') return '--seg-inprog';
+    if (k === 'ready')       return '--seg-done';
+    if (k === 'blocked')     return '--seg-blocker';
+    return '--seg-' + k;
+  };
+  const glyphFor = k => {
+    if (k === 'ready')   return T_META.todo    ? T_META.todo.glyph    : '';
+    if (k === 'blocked') return T_META.blocker ? T_META.blocker.glyph : '';
+    return T_META[k] ? T_META[k].glyph : '';
+  };
   return '<div class="list" role="grid" aria-label="Task list">' +
+    banner +
     groups.map(g => {
-      const meta = T_META[g.key];
+      const label = g.label || (T_META[g.key] ? T_META[g.key].label : g.key);
       return '<div class="list-group" role="rowgroup">' +
-        '<div class="list-group-header" role="row">' +
-          '<span class="glyph" aria-hidden="true" style="color:var(--seg-' + (g.key === 'in_progress' ? 'inprog' : g.key) + ')">' + (meta ? meta.glyph : '') + '</span>' +
-          '<span>' + (meta ? meta.label : g.key) + '</span>' +
+        '<div class="list-group-header g-' + g.key + '" role="row">' +
+          '<span class="glyph" aria-hidden="true" style="color:var(' + colorFor(g.key) + ')">' + glyphFor(g.key) + '</span>' +
+          '<span>' + Util.esc(label) + '</span>' +
           '<span class="n">' + g.items.length + '</span>' +
         '</div>' +
         g.items.map(t => obsListRow(T, t, byId)).join('') +
@@ -3990,8 +4117,7 @@ function obsListView(T, tasks, byId) {
 
 function obsListRow(T, t, byId) {
   const meta = T.statusMeta[t.status];
-  const blocker = t.blocked_by ? byId[t.blocked_by] : null;
-  const unresolved = blocker && blocker.status !== 'done';
+  const bids = Util.blockers(t);
   const body1 = Util.firstLine(t.body);
   const selected = Store.selectedId === t.id;
   const pulsing = Store.pulse[t.id] && Date.now() - Store.pulse[t.id] < 2000;
@@ -4006,9 +4132,15 @@ function obsListRow(T, t, byId) {
     return '<span class="f' + i + ' ' + (i < filled ? 'on' : '') + '"></span>';
   }).join('');
 
-  const blockerChip = t.blocked_by
-    ? '<span class="blocker-chip ' + (unresolved ? 'unresolved' : '') + '" role="gridcell" title="' + Util.esc(blocker ? blocker.title : t.blocked_by) + '">' +
-        (unresolved ? '✕ ' : '✓ ') + Util.esc(Util.shortId(t.blocked_by, 8)) +
+  const blockerChip = bids.length
+    ? '<span class="blocker-chip-group" role="gridcell">' +
+        bids.map(bid => {
+          const b = byId[bid];
+          const unres = !b || (b.status !== 'done' && b.status !== 'closed');
+          return '<span class="blocker-chip ' + (unres ? 'unresolved' : '') + '" title="' + Util.esc(b ? b.title : bid) + '">' +
+            (unres ? '✕ ' : '✓ ') + Util.esc(Util.shortId(bid, 8)) +
+          '</span>';
+        }).join(' ') +
       '</span>'
     : '<span role="gridcell"></span>';
 
@@ -4034,8 +4166,9 @@ function obsListRow(T, t, byId) {
 
 function obsDetail(T, task, byId) {
   const proj = Store.projects.find(p => p.id === task.project_id);
-  const blocker = task.blocked_by ? byId[task.blocked_by] : null;
-  const dependents = Object.values(byId).filter(t => t.blocked_by === task.id);
+  const bids = Util.blockers(task);
+  const blocker = bids.length ? byId[bids[0]] : null;
+  const dependents = Object.values(byId).filter(t => Util.blockers(t).includes(task.id));
   const statusOpts = Object.keys(T.statusMeta).map(s =>
     '<option value="' + s + '"' + (task.status === s ? ' selected' : '') + '>' + T.statusMeta[s].label + '</option>').join('');
 
@@ -4063,7 +4196,7 @@ function obsDetail(T, task, byId) {
         [0, 1, 2, 3].map(p => '<option value="' + p + '"' + (task.priority === p ? ' selected' : '') + '>P' + p + '</option>').join('') +
       '</select></span>' +
       '<span>Blocked by</span>' +
-      '<span class="blocker-cell">' + renderBlockerCombo('detail', task.blocked_by || '', task.id) + '</span>' +
+      '<span class="blocker-cell">' + renderBlockerCombo('detail', bids[0] || '', task.id) + '</span>' +
       (Store.scope === 'all' && proj ? '<span>Project</span><span class="val">' + Util.esc(proj.name) + '</span>' : '') +
       '<span>Updated</span>' +
       '<span class="val mono">' + Util.esc(Util.relTime(task.updated_at)) + '</span>' +
@@ -4311,8 +4444,7 @@ function conKanbanView(T, tasks, byId) {
 }
 
 function conKanbanCard(T, t, byId) {
-  const blocker = t.blocked_by ? byId[t.blocked_by] : null;
-  const unresolved = blocker && blocker.status !== 'done';
+  const bids = Util.blockers(t);
   const selected = Store.selectedId === t.id;
   const dragging = Store.dragging === t.id;
   const pulsing = Store.pulse[t.id] && Date.now() - Store.pulse[t.id] < 2000;
@@ -4326,10 +4458,14 @@ function conKanbanCard(T, t, byId) {
   const bangs = ['!!!', '!!', '!', '\u00B7'];
   const bang = bangs[t.priority] || '\u00B7';
 
-  const blockerChip = t.blocked_by
-    ? '<span class="blocker-chip ' + (unresolved ? 'unresolved' : 'resolved') + '" title="' + Util.esc(blocker ? blocker.title : t.blocked_by) + '">' +
-        (unresolved ? '\u2298' : '\u2713') + Util.esc(Util.shortId(t.blocked_by, 8)) +
-      '</span>'
+  const blockerChip = bids.length
+    ? bids.map(bid => {
+        const b = byId[bid];
+        const unres = !b || (b.status !== 'done' && b.status !== 'closed');
+        return '<span class="blocker-chip ' + (unres ? 'unresolved' : 'resolved') + '" title="' + Util.esc(b ? b.title : bid) + '">' +
+          (unres ? '\u2298' : '\u2713') + Util.esc(Util.shortId(bid, 8)) +
+        '</span>';
+      }).join(' ')
     : '<span></span>';
 
   return '<div class="' + classes.join(' ') + '" draggable="true" data-act="kanban-card" data-id="' + Util.esc(t.id) + '" aria-label="' + Util.esc(t.title) + '">' +
@@ -4416,18 +4552,22 @@ function conGraphView(T, tasks, byId) {
 }
 
 function conListView(T, tasks, byId) {
+  const showBanner = Store.filter === 'ready' && Store.view === 'list';
+  const banner = showBanner ? readyBannerHTML(Util.ready(Store.tasks).length) : '';
   if (!tasks.length) {
-    return '<div class="list"><div class="empty">' +
+    return '<div class="list">' + banner + '<div class="empty">' +
       (hasActiveScope()
         ? '$ no tasks' + (Store.search ? ' match “' + Util.esc(Store.search) + '”' : '') + '. press <kbd>c</kbd> to create.'
         : '$ select or create a project to get started.') +
     '</div></div>';
   }
-  const groups = groupedByStatus(tasks);
+  const expanded = readyExpandedActive();
+  const groups = expanded ? groupedReadyExpanded(tasks, byId) : groupedByStatus(tasks);
   return '<div class="list" role="grid" aria-label="Task list">' +
+    banner +
     groups.map(g => {
       const meta = T.statusMeta[g.key];
-      const label = meta ? meta.label : g.key;
+      const label = g.label || (meta ? meta.label : g.key);
       const rule = '─'.repeat(Math.max(2, 40 - label.length - String(g.items.length).length));
       return '<div class="list-group" role="rowgroup">' +
         '<div class="list-group-header g-' + g.key + '" role="row">' +
@@ -4441,8 +4581,7 @@ function conListView(T, tasks, byId) {
 
 function conListRow(T, t, byId) {
   const meta = T.statusMeta[t.status];
-  const blocker = t.blocked_by ? byId[t.blocked_by] : null;
-  const unresolved = blocker && blocker.status !== 'done';
+  const bids = Util.blockers(t);
   const body1 = Util.firstLine(t.body);
   const selected = Store.selectedId === t.id;
   const pulsing = Store.pulse[t.id] && Date.now() - Store.pulse[t.id] < 2000;
@@ -4455,9 +4594,15 @@ function conListRow(T, t, byId) {
   const bangs = ['!!!', '!!', '!', '·'];
   const bang = bangs[t.priority] || '·';
 
-  const blockerChip = t.blocked_by
-    ? '<span class="blocker-chip ' + (unresolved ? 'unresolved' : 'resolved') + '" role="gridcell" title="' + Util.esc(blocker ? blocker.title : t.blocked_by) + '">' +
-        (unresolved ? '⊘' : '✓') + Util.esc(Util.shortId(t.blocked_by, 8)) +
+  const blockerChip = bids.length
+    ? '<span class="blocker-chip-group" role="gridcell">' +
+        bids.map(bid => {
+          const b = byId[bid];
+          const unres = !b || (b.status !== 'done' && b.status !== 'closed');
+          return '<span class="blocker-chip ' + (unres ? 'unresolved' : 'resolved') + '" title="' + Util.esc(b ? b.title : bid) + '">' +
+            (unres ? '⊘' : '✓') + Util.esc(Util.shortId(bid, 8)) +
+          '</span>';
+        }).join(' ') +
       '</span>'
     : '<span role="gridcell"></span>';
 
@@ -4483,8 +4628,9 @@ function conListRow(T, t, byId) {
 
 function conDetail(T, task, byId) {
   const proj = Store.projects.find(p => p.id === task.project_id);
-  const blocker = task.blocked_by ? byId[task.blocked_by] : null;
-  const dependents = Object.values(byId).filter(t => t.blocked_by === task.id);
+  const bids = Util.blockers(task);
+  const blocker = bids.length ? byId[bids[0]] : null;
+  const dependents = Object.values(byId).filter(t => Util.blockers(t).includes(task.id));
   const statusOpts = Object.keys(T.statusMeta).map(s =>
     '<option value="' + s + '"' + (task.status === s ? ' selected' : '') + '>' +
     T.statusMeta[s].glyph + ' ' + T.statusMeta[s].label + '</option>').join('');
@@ -4513,7 +4659,7 @@ function conDetail(T, task, byId) {
         [0, 1, 2, 3].map(p => '<option value="' + p + '"' + (task.priority === p ? ' selected' : '') + '>P' + p + '</option>').join('') +
       '</select></span>' +
       '<span>blocked_by</span>' +
-      '<span class="blocker-cell">' + renderBlockerCombo('detail', task.blocked_by || '', task.id) + '</span>' +
+      '<span class="blocker-cell">' + renderBlockerCombo('detail', bids[0] || '', task.id) + '</span>' +
       (Store.scope === 'all' && proj ? '<span>project</span><span class="val">' + Util.esc(proj.name) + '</span>' : '') +
       '<span>updated</span>' +
       '<span class="val mono">' + Util.esc(Util.relTime(task.updated_at)) + '</span>' +
@@ -4757,8 +4903,7 @@ function dosKanbanView(T, tasks, byId) {
 }
 
 function dosKanbanCard(T, t, byId) {
-  const blocker = t.blocked_by ? byId[t.blocked_by] : null;
-  const unresolved = blocker && blocker.status !== 'done';
+  const bids = Util.blockers(t);
   const selected = Store.selectedId === t.id;
   const dragging = Store.dragging === t.id;
   const pulsing = Store.pulse[t.id] && Date.now() - Store.pulse[t.id] < 2000;
@@ -4769,10 +4914,14 @@ function dosKanbanCard(T, t, byId) {
   if (pulsing) classes.push('seg-pulse');
   if (entering) classes.push('seg-enter');
 
-  const blockerChip = t.blocked_by
-    ? '<span class="blocker-chip ' + (unresolved ? 'unresolved' : 'resolved') + '" title="' + Util.esc(blocker ? blocker.title : t.blocked_by) + '">' +
-        (unresolved ? 'on hold \u00B7 ' : 'clear \u00B7 ') + Util.esc(Util.shortId(t.blocked_by, 8)) +
-      '</span>'
+  const blockerChip = bids.length
+    ? bids.map(bid => {
+        const b = byId[bid];
+        const unres = !b || (b.status !== 'done' && b.status !== 'closed');
+        return '<span class="blocker-chip ' + (unres ? 'unresolved' : 'resolved') + '" title="' + Util.esc(b ? b.title : bid) + '">' +
+          (unres ? 'on hold \u00B7 ' : 'clear \u00B7 ') + Util.esc(Util.shortId(bid, 8)) +
+        '</span>';
+      }).join(' ')
     : '<span></span>';
 
   return '<div class="' + classes.join(' ') + '" draggable="true" data-act="kanban-card" data-id="' + Util.esc(t.id) + '" aria-label="' + Util.esc(t.title) + '">' +
@@ -4860,23 +5009,33 @@ function dosGraphView(T, tasks, byId) {
 }
 
 function dosListView(T, tasks, byId) {
+  const showBanner = Store.filter === 'ready' && Store.view === 'list';
+  const banner = showBanner ? readyBannerHTML(Util.ready(Store.tasks).length) : '';
   if (!tasks.length) {
-    return '<div class="list"><div class="empty">' +
+    return '<div class="list">' + banner + '<div class="empty">' +
       (hasActiveScope()
         ? '\u2014 No entries' + (Store.search ? ' matching \u201C' + Util.esc(Store.search) + '\u201D' : '') + '. Press c to compose. \u2014'
         : '\u2014 Select or create a project to get started. \u2014') +
     '</div></div>';
   }
-  const groups = groupedByStatus(tasks);
+  const expanded = readyExpandedActive();
+  const groups = expanded ? groupedReadyExpanded(tasks, byId) : groupedByStatus(tasks);
+  const glyphFor = k => {
+    if (k === 'ready')   return T.statusMeta.todo    ? T.statusMeta.todo.glyph    : '';
+    if (k === 'blocked') return T.statusMeta.blocker ? T.statusMeta.blocker.glyph : '';
+    return T.statusMeta[k] ? T.statusMeta[k].glyph : '';
+  };
   let runningIdx = 0;
   return '<div class="list" role="grid" aria-label="Task list">' +
+    banner +
     groups.map(g => {
       const meta = T.statusMeta[g.key];
-      const label = meta ? meta.label.toUpperCase() : g.key.toUpperCase();
+      const rawLabel = g.label || (meta ? meta.label : g.key);
+      const label = rawLabel.toUpperCase();
       return '<div class="list-group" role="rowgroup">' +
         '<div class="list-group-header g-' + g.key + '" role="row">' +
           '<span>' +
-            '<span class="glyph" aria-hidden="true">' + (meta ? meta.glyph : '') + '</span>' + label +
+            '<span class="glyph" aria-hidden="true">' + glyphFor(g.key) + '</span>' + label +
           '</span>' +
           '<span class="n">' + g.items.length + ' ' + (g.items.length === 1 ? 'entry' : 'entries') + '</span>' +
         '</div>' +
@@ -4888,8 +5047,7 @@ function dosListView(T, tasks, byId) {
 
 function dosListRow(T, t, byId, idx) {
   const meta = T.statusMeta[t.status];
-  const blocker = t.blocked_by ? byId[t.blocked_by] : null;
-  const unresolved = blocker && blocker.status !== 'done';
+  const bids = Util.blockers(t);
   const body1 = Util.firstLine(t.body);
   const selected = Store.selectedId === t.id;
   const pulsing = Store.pulse[t.id] && Date.now() - Store.pulse[t.id] < 2000;
@@ -4901,10 +5059,16 @@ function dosListRow(T, t, byId, idx) {
 
   const priLabel = 'Priority P' + t.priority;
 
-  const blockerChip = t.blocked_by
-    ? (unresolved
-        ? '<span class="blocker-chip unresolved" role="gridcell" title="' + Util.esc(blocker ? blocker.title : t.blocked_by) + '">HELD BY ' + Util.esc(Util.shortId(t.blocked_by, 6)) + '</span>'
-        : '<span class="blocker-chip resolved" role="gridcell" title="' + Util.esc(blocker ? blocker.title : t.blocked_by) + '">\u2713 ' + Util.esc(Util.shortId(t.blocked_by, 6)) + '</span>')
+  const blockerChip = bids.length
+    ? '<span class="blocker-chip-group" role="gridcell">' +
+        bids.map(bid => {
+          const b = byId[bid];
+          const unres = !b || (b.status !== 'done' && b.status !== 'closed');
+          return unres
+            ? '<span class="blocker-chip unresolved" title="' + Util.esc(b ? b.title : bid) + '">HELD BY ' + Util.esc(Util.shortId(bid, 6)) + '</span>'
+            : '<span class="blocker-chip resolved" title="' + Util.esc(b ? b.title : bid) + '">\u2713 ' + Util.esc(Util.shortId(bid, 6)) + '</span>';
+        }).join(' ') +
+      '</span>'
     : '<span role="gridcell"></span>';
 
   const statusLabel = meta ? meta.label.toUpperCase() : t.status.toUpperCase();
@@ -4931,8 +5095,9 @@ function dosListRow(T, t, byId, idx) {
 
 function dosDetail(T, task, byId) {
   const proj = Store.projects.find(p => p.id === task.project_id);
-  const blocker = task.blocked_by ? byId[task.blocked_by] : null;
-  const dependents = Object.values(byId).filter(t => t.blocked_by === task.id);
+  const bids = Util.blockers(task);
+  const blocker = bids.length ? byId[bids[0]] : null;
+  const dependents = Object.values(byId).filter(t => Util.blockers(t).includes(task.id));
   const statusOpts = Object.keys(T.statusMeta).map(s =>
     '<option value="' + s + '"' + (task.status === s ? ' selected' : '') + '>' +
     T.statusMeta[s].label.toUpperCase() + '</option>').join('');
@@ -4973,7 +5138,7 @@ function dosDetail(T, task, byId) {
         [0, 1, 2, 3].map(p => '<option value="' + p + '"' + (task.priority === p ? ' selected' : '') + '>' + DOS_ROMAN[p] + ' (P' + p + ')</option>').join('') +
       '</select></span>' +
       '<span class="label">Held by</span>' +
-      '<span class="blocker-cell">' + renderBlockerCombo('detail', task.blocked_by || '', task.id) + '</span>' +
+      '<span class="blocker-cell">' + renderBlockerCombo('detail', bids[0] || '', task.id) + '</span>' +
       (Store.scope === 'all' && proj ? '<span class="label">Project</span><span class="val">' + Util.esc(proj.name) + '</span>' : '') +
       '<span class="label">Updated</span>' +
       '<span class="val mono">' + Util.esc(Util.relTime(task.updated_at)) + '</span>' +
@@ -5177,6 +5342,7 @@ app.addEventListener('click', async (e) => {
     case 'project': Actions.switchProject(id); return;
     case 'scope-all': Actions.setScopeAll(); return;
     case 'toggle-ready': Actions.toggleReadyFilter(); return;
+    case 'toggle-ready-strict': Actions.toggleReadyStrict(); return;
     case 'new-project': Actions.openNewProject(); return;
     case 'close-new-project': Actions.closeNewProject(); return;
     case 'close-new-project-backdrop':

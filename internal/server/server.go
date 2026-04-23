@@ -408,12 +408,12 @@ func (s *Server) handleUpdateTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		ProjectID string          `json:"project_id"`
-		Title     string          `json:"title"`
-		Body      string          `json:"body"`
-		Status    models.TaskStatus `json:"status"`
-		Priority  int             `json:"priority"`
-		BlockedBy string          `json:"blocked_by"`
+		ProjectID string             `json:"project_id"`
+		Title     *string            `json:"title"`
+		Body      *string            `json:"body"`
+		Status    *models.TaskStatus `json:"status"`
+		Priority  *int               `json:"priority"`
+		BlockedBy json.RawMessage    `json:"blocked_by"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		s.writeError(w, err.Error(), http.StatusBadRequest)
@@ -425,7 +425,19 @@ func (s *Server) handleUpdateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	task, err := s.store.UpdateTask(req.ProjectID, taskID, req.Title, req.Body, req.Status, req.Priority, req.BlockedBy)
+	blockedBy, err := decodeBlockedBy(req.BlockedBy)
+	if err != nil {
+		s.writeError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	task, err := s.store.UpdateTask(req.ProjectID, taskID, store.TaskPatch{
+		Title:     req.Title,
+		Body:      req.Body,
+		Status:    req.Status,
+		Priority:  req.Priority,
+		BlockedBy: blockedBy,
+	})
 	if err != nil {
 		s.writeError(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -517,6 +529,33 @@ func (s *Server) handleExtension(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/typescript")
 	w.Header().Set("X-Extension-Path", s.config.Extension)
 	w.Write(data)
+}
+
+// Absent field preserves; empty string / empty array / null clears.
+func decodeBlockedBy(raw json.RawMessage) (*[]string, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	if string(raw) == "null" {
+		empty := []string{}
+		return &empty, nil
+	}
+	if raw[0] == '[' {
+		var out []string
+		if err := json.Unmarshal(raw, &out); err != nil {
+			return nil, err
+		}
+		return &out, nil
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return nil, err
+	}
+	if s == "" {
+		empty := []string{}
+		return &empty, nil
+	}
+	return &[]string{s}, nil
 }
 
 func (s *Server) extractID(r *http.Request) string {

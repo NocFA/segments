@@ -29,25 +29,25 @@ const (
 )
 
 type task struct {
-	ID        string `json:"id"`
-	ProjectID string `json:"project_id"`
-	Title     string `json:"title"`
-	Status    string `json:"status"`
-	Priority  int    `json:"priority"`
-	Body      string `json:"body"`
-	BlockedBy string `json:"blocked_by,omitempty"`
+	ID        string   `json:"id"`
+	ProjectID string   `json:"project_id"`
+	Title     string   `json:"title"`
+	Status    string   `json:"status"`
+	Priority  int      `json:"priority"`
+	Body      string   `json:"body"`
+	BlockedBy []string `json:"blocked_by,omitempty"`
 }
 
 // updateReq is the PUT body. Priority has NO omitempty: we always send -1 so the
 // store preserves the existing priority. Other fields use omitempty so empty
 // values hit the preserve-on-empty path in store.UpdateTask.
 type updateReq struct {
-	ProjectID string `json:"project_id"`
-	Title     string `json:"title,omitempty"`
-	Body      string `json:"body,omitempty"`
-	Status    string `json:"status,omitempty"`
-	Priority  int    `json:"priority"`
-	BlockedBy string `json:"blocked_by,omitempty"`
+	ProjectID string   `json:"project_id"`
+	Title     string   `json:"title,omitempty"`
+	Body      string   `json:"body,omitempty"`
+	Status    string   `json:"status,omitempty"`
+	Priority  int      `json:"priority"`
+	BlockedBy []string `json:"blocked_by,omitempty"`
 }
 
 type client struct {
@@ -303,7 +303,7 @@ func runAgent(ctx context.Context, id int, c *client, cfg *config, runID string,
 			logChange(id, t.ID, shape, nodes[i].title, "new", "todo")
 			if nodes[i].primary >= 0 {
 				parentID := nodes[nodes[i].primary].id
-				u := updateReq{ProjectID: cfg.projectID, Priority: -1, BlockedBy: parentID}
+				u := updateReq{ProjectID: cfg.projectID, Priority: -1, BlockedBy: []string{parentID}}
 				if _, err := c.updateTask(ctx, t.ID, u); err != nil {
 					if ctx.Err() != nil {
 						return
@@ -429,10 +429,16 @@ func cleanup(c *client, projectID, runID string, all bool) {
 		}
 		seen[id] = true
 		t, ok := byID[id]
-		if !ok || t.BlockedBy == "" {
+		if !ok || len(t.BlockedBy) == 0 {
 			return 0
 		}
-		return 1 + chainLen(t.BlockedBy, seen)
+		best := 0
+		for _, bid := range t.BlockedBy {
+			if n := chainLen(bid, seen); n > best {
+				best = n
+			}
+		}
+		return 1 + best
 	}
 	for _, t := range targets {
 		depth[t.ID] = chainLen(t.ID, map[string]bool{})

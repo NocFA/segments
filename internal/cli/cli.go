@@ -751,18 +751,39 @@ func humanAge(d time.Duration) string {
 	}
 }
 
-// blockedOpenFor reports whether t has a blocker that has not yet landed.
-// A missing blocker (stale reference) is treated as open so the task stays
-// in the BLOCKED section rather than silently promoting to READY.
+// Stale blocker ref is treated as open so the task stays in BLOCKED.
 func blockedOpenFor(t models.Task, byID map[string]*models.Task) bool {
-	if t.BlockedBy == "" {
-		return false
+	for _, id := range t.BlockedBy {
+		if id == "" {
+			continue
+		}
+		b, ok := byID[id]
+		if !ok {
+			return true
+		}
+		if b.Status != models.StatusDone && b.Status != models.StatusClosed {
+			return true
+		}
 	}
-	b, ok := byID[t.BlockedBy]
-	if !ok {
-		return true
+	return false
+}
+
+func openBlockersFor(t models.Task, byID map[string]*models.Task) []string {
+	var out []string
+	for _, id := range t.BlockedBy {
+		if id == "" {
+			continue
+		}
+		b, ok := byID[id]
+		if !ok {
+			out = append(out, id)
+			continue
+		}
+		if b.Status != models.StatusDone && b.Status != models.StatusClosed {
+			out = append(out, id)
+		}
 	}
-	return b.Status != models.StatusDone && b.Status != models.StatusClosed
+	return out
 }
 
 type taskSections struct {
@@ -911,7 +932,16 @@ func printSection(label string, accent lipgloss.Style, tasks []models.Task, byID
 			title,
 		)
 		if blockedOpen && !strikeTitle {
-			line += "  " + red.Render("\u2190\u2500\u2500 "+t.BlockedBy[:8])
+			open := openBlockersFor(t, byID)
+			chips := make([]string, 0, len(open))
+			for _, id := range open {
+				if len(id) >= 8 {
+					chips = append(chips, id[:8])
+				} else {
+					chips = append(chips, id)
+				}
+			}
+			line += "  " + red.Render("\u2190\u2500\u2500 "+strings.Join(chips, ", "))
 		}
 		fmt.Println(line)
 	}
@@ -945,16 +975,28 @@ func runView(s *store.Store, args []string) error {
 		return err
 	}
 
-	var blockerTask *models.Task
+	type blockerEntry struct {
+		id   string
+		task *models.Task
+		open bool
+	}
+	var blockers []blockerEntry
 	blockedOpen := false
-	if task.BlockedBy != "" {
-		bt, _, _ := findTaskByPrefix(s, task.BlockedBy)
-		if bt != nil {
-			blockerTask = bt
-			blockedOpen = bt.Status != models.StatusDone && bt.Status != models.StatusClosed
+	for _, bid := range task.BlockedBy {
+		if bid == "" {
+			continue
+		}
+		bt, _, _ := findTaskByPrefix(s, bid)
+		entry := blockerEntry{id: bid, task: bt}
+		if bt == nil {
+			entry.open = true
 		} else {
+			entry.open = bt.Status != models.StatusDone && bt.Status != models.StatusClosed
+		}
+		if entry.open {
 			blockedOpen = true
 		}
+		blockers = append(blockers, entry)
 	}
 
 	glyph := statusGlyph(task.Status, blockedOpen)
@@ -970,10 +1012,17 @@ func runView(s *store.Store, args []string) error {
 	meta += dim.Render("  \u00b7  " + age + " old")
 	fmt.Println(meta)
 
-	if blockedOpen {
-		blockerStr := red.Render("\u2190\u2500\u2500 " + task.BlockedBy[:8])
-		if blockerTask != nil {
-			blockerStr += "  " + dim.Render(blockerTask.Title)
+	for _, entry := range blockers {
+		if !entry.open {
+			continue
+		}
+		short := entry.id
+		if len(short) >= 8 {
+			short = short[:8]
+		}
+		blockerStr := red.Render("\u2190\u2500\u2500 " + short)
+		if entry.task != nil {
+			blockerStr += "  " + dim.Render(entry.task.Title)
 		}
 		fmt.Println("  " + blockerStr)
 	}
@@ -999,7 +1048,17 @@ func runView(s *store.Store, args []string) error {
 		var hint string
 		switch {
 		case task.Status == models.StatusTodo && blockedOpen:
-			hint = "sg view " + task.BlockedBy[:8] + " for the blocker"
+			var firstOpen string
+			for _, entry := range blockers {
+				if entry.open {
+					firstOpen = entry.id
+					break
+				}
+			}
+			if len(firstOpen) >= 8 {
+				firstOpen = firstOpen[:8]
+			}
+			hint = "sg view " + firstOpen + " for the blocker"
 		case task.Status == models.StatusTodo:
 			hint = "sg start " + task.ID[:8] + " to claim"
 		case task.Status == models.StatusInProgress:
@@ -1974,7 +2033,8 @@ func importBeads(s *store.Store, projectID, path string) error {
 			tasks, _ := s.ListTasks(projectID)
 			if len(tasks) > 0 {
 				last := tasks[len(tasks)-1]
-				s.UpdateTask(projectID, last.ID, "", "", models.StatusClosed, -1, "")
+				closed := models.StatusClosed
+				s.UpdateTask(projectID, last.ID, store.TaskPatch{Status: &closed})
 			}
 		}
 
@@ -1987,6 +2047,7 @@ func importBeads(s *store.Store, projectID, path string) error {
 
 func runAdd(s *store.Store, args []string) error {
 	var hint, title, body string
+	var blockedBy []string
 
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
@@ -1998,6 +2059,16 @@ func runAdd(s *store.Store, args []string) error {
 		case "-m":
 			if i+1 < len(args) {
 				body = args[i+1]
+				i++
+			}
+		case "-b":
+			if i+1 < len(args) {
+				for _, id := range strings.Split(args[i+1], ",") {
+					id = strings.TrimSpace(id)
+					if id != "" {
+						blockedBy = append(blockedBy, id)
+					}
+				}
 				i++
 			}
 		default:
@@ -2016,6 +2087,12 @@ func runAdd(s *store.Store, args []string) error {
 	t, err := s.CreateTask(projectID, title, body, 0)
 	if err != nil {
 		return err
+	}
+	if len(blockedBy) > 0 {
+		t, err = s.UpdateTask(projectID, t.ID, store.TaskPatch{BlockedBy: &blockedBy})
+		if err != nil {
+			return err
+		}
 	}
 	notifyServerEvent("task:created", t)
 	if !isTerminal() {
@@ -2036,7 +2113,8 @@ func runClose(s *store.Store, args []string) error {
 	if err != nil {
 		return err
 	}
-	t, err := s.UpdateTask(projectID, taskID, "", "", models.StatusClosed, -1, "")
+	closed := models.StatusClosed
+	t, err := s.UpdateTask(projectID, taskID, store.TaskPatch{Status: &closed})
 	if err != nil {
 		return err
 	}
@@ -2079,7 +2157,8 @@ func runDone(s *store.Store, args []string) error {
 	if err != nil {
 		return err
 	}
-	t, err := s.UpdateTask(projectID, taskID, "", "", models.StatusDone, -1, "")
+	done := models.StatusDone
+	t, err := s.UpdateTask(projectID, taskID, store.TaskPatch{Status: &done})
 	if err != nil {
 		return err
 	}
@@ -3366,6 +3445,15 @@ func mcpToolDefs() []map[string]interface{} {
 		return s
 	}
 	optProject := prop("string", "Project ID. Optional: auto-resolves from CWD basename, single-project fallback, or $SEGMENTS_PROJECT_ID.")
+	blockedByArr := func(desc string) map[string]interface{} {
+		return map[string]interface{}{
+			"description": desc,
+			"anyOf": []interface{}{
+				map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}},
+				map[string]interface{}{"type": "string"},
+			},
+		}
+	}
 	return []map[string]interface{}{
 		{"name": "segments_list_projects", "description": "List all projects.",
 			"inputSchema": schema(nil, map[string]interface{}{})},
@@ -3393,7 +3481,7 @@ func mcpToolDefs() []map[string]interface{} {
 				"title":      prop("string", "Task title"),
 				"body":       prop("string", "Self-contained description: what to do, file paths, constraints, expected outcome. A fresh session must be able to pick it up from this alone."),
 				"priority":   prop("number", "Integer 1, 2, or 3 -- pick one every time you create. 1=URGENT (\"drop everything\", broken build, blocking other work). 2=NORMAL (regular session work; default when the intent is now-or-next). 3=BACKLOG (\"sometime\"/idea/future). 0 is legacy-unset -- do NOT pick 0 when creating."),
-				"blocked_by": prop("string", "Task ID of a hard blocker. REQUIRED whenever this task literally cannot start until the blocker lands. Common cases: bootstrap blocks downstream, \"Install X\" blocks \"Use X\", schema migration blocks feature that queries it, task discovered while working on X -> blocked_by=<X>. Leave empty only for genuinely independent tasks."),
+				"blocked_by": blockedByArr("Task IDs that hard-block this one. Pass a JSON array of task IDs (preferred when there are 2+); a single string is accepted and coerced to a one-element array. Task stays BLOCKED until every id in the array is done/closed. REQUIRED whenever this task literally cannot start until the blocker(s) land. Common cases: bootstrap blocks downstream, \"Install X\" blocks \"Use X\", schema migration blocks feature that queries it, task discovered while working on X -> blocked_by=[<X>]. Omit for genuinely independent tasks."),
 			})},
 		{"name": "segments_create_tasks", "description": "Create multiple tasks in one call. PREFERRED for planning/scaffolding -- scaffold a whole queue in one round-trip instead of N separate calls. The 'tasks' argument MUST be a real JSON array of objects (NOT a JSON-encoded string). Set priority (1/2/3) on every entry. In blocked_by, '#0'..'#N' references earlier entries in the same batch (resolved to their new UUIDs). Link obvious dependency chains: for a greenfield scaffold, put the bootstrap/init task at #0 and every downstream task gets blocked_by=\"#0\". Creating a scaffold batch without linking obvious dependencies is a correctness mistake, not a style choice.",
 			"inputSchema": schema([]string{"tasks"}, map[string]interface{}{
@@ -3408,7 +3496,7 @@ func mcpToolDefs() []map[string]interface{} {
 							"title":      prop("string", "Task title"),
 							"body":       prop("string", "Self-contained description: what to do, file paths, constraints, expected outcome."),
 							"priority":   prop("number", "Integer 1, 2, or 3 -- pick one per task. 1=URGENT (drop-everything, broken build, blocking other work). 2=NORMAL (regular session work; default when unsure). 3=BACKLOG (someday/idea/future). Do NOT pick 0 when creating."),
-							"blocked_by": prop("string", "Task ID or '#<index>' of an earlier entry in this batch. Use '#0' when everything depends on a bootstrap task. REQUIRED whenever this task literally cannot start until the blocker lands (bootstrap -> downstream, Install X -> Use X, schema -> feature, discovered-from parent -> child). Omit ONLY for genuinely independent tasks."),
+							"blocked_by": blockedByArr("Task IDs (or '#<index>' batch refs) that hard-block this entry. Pass a JSON array (preferred for 2+ blockers); a single string is accepted and coerced to a one-element array. '#0'..'#N' resolve to earlier entries in this batch; mixing UUIDs and '#N' refs in one array is fine. Use '#0' when everything depends on a bootstrap task. REQUIRED whenever this task literally cannot start until the blocker(s) land. Omit ONLY for genuinely independent tasks."),
 						},
 					},
 				},
@@ -3421,7 +3509,7 @@ func mcpToolDefs() []map[string]interface{} {
 				"body":       prop("string", "New body/description"),
 				"status":     prop("string", "todo | in_progress | done | closed | blocker. Set in_progress when you claim/pick up a task; done when the work lands."),
 				"priority":   prop("number", "Integer. 1=URGENT (drop everything / blocking work). 2=NORMAL (regular session work). 3=BACKLOG (someday/idea/future). 0=unset is legacy-only."),
-				"blocked_by": prop("string", "Task ID of a hard blocker (empty to clear). Set whenever this task literally cannot start until the blocker lands."),
+				"blocked_by": blockedByArr("Replacement list of blocker task IDs. Pass a JSON array of IDs; a single string (coerced to one element) or an empty string/empty array to clear is accepted. Omit the field entirely to preserve existing blockers."),
 			})},
 		{"name": "segments_update_tasks", "description": "Update multiple tasks in one call. PREFERRED whenever you are changing two or more tasks -- one round-trip instead of N separate calls. The 'updates' argument MUST be a real JSON array of objects (NOT a JSON-encoded string). Use this to CLAIM a sequence of tasks (set status=in_progress on each) up front when the user hands you multiple task IDs to work through -- all downstream agents see the claim atomically instead of racing. Also use it to mark several tasks done at session end. Per-entry fields follow segments_update_task semantics.",
 			"inputSchema": schema([]string{"updates"}, map[string]interface{}{
@@ -3438,7 +3526,7 @@ func mcpToolDefs() []map[string]interface{} {
 							"body":       prop("string", "New body/description"),
 							"status":     prop("string", "todo | in_progress | done | closed | blocker. Set in_progress to claim; done when work lands."),
 							"priority":   prop("number", "Integer 1/2/3. 1=URGENT, 2=NORMAL, 3=BACKLOG. 0=unset is legacy-only."),
-							"blocked_by": prop("string", "Task ID of a hard blocker (empty to clear)."),
+							"blocked_by": blockedByArr("Replacement list of blocker task IDs. Pass an array of IDs; a single string or an empty string/empty array to clear is also accepted. Omit to preserve."),
 						},
 					},
 				},
@@ -3636,6 +3724,57 @@ func marshalTaskWithResolve(ref *taskRef) string {
 	return string(d)
 }
 
+// nil v preserves; empty string / empty array clears; "#N" resolves to the Nth batch entry.
+func parseBlockedByArg(v interface{}, created []*models.Task) (*[]string, error) {
+	if v == nil {
+		return nil, nil
+	}
+	resolve := func(id string) (string, error) {
+		if !strings.HasPrefix(id, "#") {
+			return id, nil
+		}
+		if created == nil {
+			return "", fmt.Errorf("blocked_by=%q: batch refs are only supported inside create_tasks", id)
+		}
+		idx, err := strconv.Atoi(id[1:])
+		if err != nil || idx < 0 || idx >= len(created) {
+			return "", fmt.Errorf("blocked_by=%q: no earlier batch entry at that index", id)
+		}
+		return created[idx].ID, nil
+	}
+	switch x := v.(type) {
+	case string:
+		if x == "" {
+			empty := []string{}
+			return &empty, nil
+		}
+		resolved, err := resolve(x)
+		if err != nil {
+			return nil, err
+		}
+		out := []string{resolved}
+		return &out, nil
+	case []interface{}:
+		out := make([]string, 0, len(x))
+		for i, item := range x {
+			s, ok := item.(string)
+			if !ok {
+				return nil, fmt.Errorf("blocked_by[%d] must be a string", i)
+			}
+			if s == "" {
+				continue
+			}
+			resolved, err := resolve(s)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, resolved)
+		}
+		return &out, nil
+	}
+	return nil, fmt.Errorf("blocked_by must be a string or array of strings")
+}
+
 // coerceInt parses an integer argument received over MCP. The schema advertises
 // "number", but real clients (especially when the field sits at the top level
 // of a tool call) sometimes serialise it as a string. Accept float64, int,
@@ -3675,7 +3814,7 @@ type compactTask struct {
 	Title     string            `json:"title"`
 	Status    models.TaskStatus `json:"status"`
 	Priority  int               `json:"priority"`
-	BlockedBy string            `json:"blocked_by,omitempty"`
+	BlockedBy []string          `json:"blocked_by,omitempty"`
 	ClosedAt  *time.Time        `json:"closed_at,omitempty"`
 	UpdatedAt time.Time         `json:"updated_at"`
 }
@@ -4076,8 +4215,12 @@ func callTool(s *store.Store, mc mcpContext, tool string, args map[string]interf
 		if err != nil {
 			return errMsg(err)
 		}
-		if blockedBy := str("blocked_by"); blockedBy != "" {
-			t, err = s.UpdateTask(pid, t.ID, "", "", "", -1, blockedBy)
+		bb, err := parseBlockedByArg(args["blocked_by"], nil)
+		if err != nil {
+			return errMsg(err)
+		}
+		if bb != nil && len(*bb) > 0 {
+			t, err = s.UpdateTask(pid, t.ID, store.TaskPatch{BlockedBy: bb})
 			if err != nil {
 				return errMsg(err)
 			}
@@ -4118,20 +4261,16 @@ func callTool(s *store.Store, mc mcpContext, tool string, args map[string]interf
 			if p, ok := obj["priority"]; ok {
 				priority = coerceInt(p, 0)
 			}
-			blockedBy, _ := obj["blocked_by"].(string)
-			if strings.HasPrefix(blockedBy, "#") {
-				idx, perr := strconv.Atoi(blockedBy[1:])
-				if perr != nil || idx < 0 || idx >= len(created) {
-					return errMsg(fmt.Errorf("tasks[%d].blocked_by=%q: no earlier batch entry at that index", i, blockedBy))
-				}
-				blockedBy = created[idx].ID
+			bb, err := parseBlockedByArg(obj["blocked_by"], created)
+			if err != nil {
+				return errMsg(fmt.Errorf("tasks[%d]: %v", i, err))
 			}
 			t, err := s.CreateTask(pid, title, body, priority)
 			if err != nil {
 				return errMsg(fmt.Errorf("tasks[%d]: %v", i, err))
 			}
-			if blockedBy != "" {
-				t, err = s.UpdateTask(pid, t.ID, "", "", "", -1, blockedBy)
+			if bb != nil && len(*bb) > 0 {
+				t, err = s.UpdateTask(pid, t.ID, store.TaskPatch{BlockedBy: bb})
 				if err != nil {
 					return errMsg(fmt.Errorf("tasks[%d] set blocked_by: %v", i, err))
 				}
@@ -4148,9 +4287,29 @@ func callTool(s *store.Store, mc mcpContext, tool string, args map[string]interf
 			}
 			return errMsg(err)
 		}
-		status := models.TaskStatus(str("status"))
-		priority := intArg("priority", -1)
-		t, err := s.UpdateTask(ref.ProjectID, ref.Task.ID, str("title"), str("body"), status, priority, str("blocked_by"))
+		var patch store.TaskPatch
+		if v, ok := args["title"].(string); ok {
+			patch.Title = &v
+		}
+		if v, ok := args["body"].(string); ok {
+			patch.Body = &v
+		}
+		if v, ok := args["status"].(string); ok {
+			st := models.TaskStatus(v)
+			patch.Status = &st
+		}
+		if v, ok := args["priority"]; ok {
+			p := coerceInt(v, -1)
+			patch.Priority = &p
+		}
+		if _, present := args["blocked_by"]; present {
+			bb, berr := parseBlockedByArg(args["blocked_by"], nil)
+			if berr != nil {
+				return errMsg(berr)
+			}
+			patch.BlockedBy = bb
+		}
+		t, err := s.UpdateTask(ref.ProjectID, ref.Task.ID, patch)
 		if err != nil {
 			return errMsg(err)
 		}
@@ -4186,18 +4345,29 @@ func callTool(s *store.Store, mc mcpContext, tool string, args map[string]interf
 				}
 				return errMsg(fmt.Errorf("updates[%d]: %v", i, err))
 			}
-			title, _ := obj["title"].(string)
-			body, _ := obj["body"].(string)
-			status := models.TaskStatus("")
-			if s, ok := obj["status"].(string); ok {
-				status = models.TaskStatus(s)
+			var patch store.TaskPatch
+			if v, ok := obj["title"].(string); ok {
+				patch.Title = &v
 			}
-			priority := -1
-			if p, ok := obj["priority"]; ok {
-				priority = coerceInt(p, -1)
+			if v, ok := obj["body"].(string); ok {
+				patch.Body = &v
 			}
-			blockedBy, _ := obj["blocked_by"].(string)
-			t, err := s.UpdateTask(ref.ProjectID, ref.Task.ID, title, body, status, priority, blockedBy)
+			if v, ok := obj["status"].(string); ok {
+				st := models.TaskStatus(v)
+				patch.Status = &st
+			}
+			if v, ok := obj["priority"]; ok {
+				p := coerceInt(v, -1)
+				patch.Priority = &p
+			}
+			if _, present := obj["blocked_by"]; present {
+				bb, berr := parseBlockedByArg(obj["blocked_by"], nil)
+				if berr != nil {
+					return errMsg(fmt.Errorf("updates[%d]: %v", i, berr))
+				}
+				patch.BlockedBy = bb
+			}
+			t, err := s.UpdateTask(ref.ProjectID, ref.Task.ID, patch)
 			if err != nil {
 				return errMsg(fmt.Errorf("updates[%d]: %v", i, err))
 			}

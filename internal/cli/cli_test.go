@@ -87,8 +87,8 @@ func TestSelectNextTask_OrderingByPriorityThenAge(t *testing.T) {
 func TestSelectNextTask_FiltersNonTodoAndBlocked(t *testing.T) {
 	tasks := []models.Task{
 		{ID: "a", Status: models.StatusInProgress},
-		{ID: "b", Status: models.StatusTodo, BlockedBy: "missing"},
-		{ID: "c", Status: models.StatusTodo, BlockedBy: "d"},
+		{ID: "b", Status: models.StatusTodo, BlockedBy: []string{"missing"}},
+		{ID: "c", Status: models.StatusTodo, BlockedBy: []string{"d"}},
 		{ID: "d", Status: models.StatusDone},
 		{ID: "e", Status: models.StatusTodo},
 		{ID: "f", Status: models.StatusClosed},
@@ -188,7 +188,7 @@ func TestSelectNextTask_EmptyWhenNoCandidates(t *testing.T) {
 	tasks := []models.Task{
 		{ID: "a", Status: models.StatusInProgress},
 		{ID: "b", Status: models.StatusDone},
-		{ID: "c", Status: models.StatusTodo, BlockedBy: "a"},
+		{ID: "c", Status: models.StatusTodo, BlockedBy: []string{"a"}},
 	}
 	if got := selectNextTask(tasks); len(got) != 0 {
 		t.Fatalf("got %v, want empty", got)
@@ -1062,11 +1062,12 @@ func TestMCPListTasks_OrderByClosedAtDesc(t *testing.T) {
 	c, _ := st.CreateTask(p.ID, "c", "", 2)
 
 	// Close in order a, c, b. Expected closed_at_desc order: b, c, a.
-	st.UpdateTask(p.ID, a.ID, "", "", models.StatusDone, -1, "")
+	done := models.StatusDone
+	st.UpdateTask(p.ID, a.ID, store.TaskPatch{Status: &done})
 	time.Sleep(20 * time.Millisecond)
-	st.UpdateTask(p.ID, c.ID, "", "", models.StatusDone, -1, "")
+	st.UpdateTask(p.ID, c.ID, store.TaskPatch{Status: &done})
 	time.Sleep(20 * time.Millisecond)
-	st.UpdateTask(p.ID, b.ID, "", "", models.StatusDone, -1, "")
+	st.UpdateTask(p.ID, b.ID, store.TaskPatch{Status: &done})
 
 	// status=done should auto-pick closed_at_desc when order_by unset.
 	out := callTool(st, mcpContext{}, "segments_list_tasks", map[string]interface{}{
@@ -1159,11 +1160,13 @@ func TestMCPRecent_OrdersByClosedAtDesc(t *testing.T) {
 	b, _ := st.CreateTask(p.ID, "b", "first line of b", 2)
 	c, _ := st.CreateTask(p.ID, "c", "first line of c", 2)
 
-	st.UpdateTask(p.ID, a.ID, "", "", models.StatusDone, -1, "")
+	done := models.StatusDone
+	closed := models.StatusClosed
+	st.UpdateTask(p.ID, a.ID, store.TaskPatch{Status: &done})
 	time.Sleep(20 * time.Millisecond)
-	st.UpdateTask(p.ID, c.ID, "", "", models.StatusDone, -1, "")
+	st.UpdateTask(p.ID, c.ID, store.TaskPatch{Status: &done})
 	time.Sleep(20 * time.Millisecond)
-	st.UpdateTask(p.ID, b.ID, "", "", models.StatusClosed, -1, "")
+	st.UpdateTask(p.ID, b.ID, store.TaskPatch{Status: &closed})
 
 	out := callTool(st, mcpContext{}, "segments_recent", map[string]interface{}{"project_id": p.ID})
 	var got []map[string]interface{}
@@ -1202,9 +1205,10 @@ func TestMCPRecent_LimitDefaultAndOverride(t *testing.T) {
 
 	st := store.NewStore(dir)
 	p, _ := st.CreateProject("alpha")
+	done := models.StatusDone
 	for i := 0; i < 15; i++ {
 		tk, _ := st.CreateTask(p.ID, "t", "body", 2)
-		st.UpdateTask(p.ID, tk.ID, "", "", models.StatusDone, -1, "")
+		st.UpdateTask(p.ID, tk.ID, store.TaskPatch{Status: &done})
 	}
 
 	out := callTool(st, mcpContext{}, "segments_recent", map[string]interface{}{"project_id": p.ID})
@@ -1235,11 +1239,12 @@ func TestMCPRecent_SinceExcludesOld(t *testing.T) {
 
 	st := store.NewStore(dir)
 	p, _ := st.CreateProject("alpha")
+	done := models.StatusDone
 	old, _ := st.CreateTask(p.ID, "old", "", 2)
-	st.UpdateTask(p.ID, old.ID, "", "", models.StatusDone, -1, "")
+	st.UpdateTask(p.ID, old.ID, store.TaskPatch{Status: &done})
 	time.Sleep(150 * time.Millisecond)
 	fresh, _ := st.CreateTask(p.ID, "fresh", "", 2)
-	st.UpdateTask(p.ID, fresh.ID, "", "", models.StatusDone, -1, "")
+	st.UpdateTask(p.ID, fresh.ID, store.TaskPatch{Status: &done})
 
 	out := callTool(st, mcpContext{}, "segments_recent", map[string]interface{}{
 		"project_id": p.ID,
@@ -1266,9 +1271,11 @@ func TestMCPRecent_SkipsOpenTasks(t *testing.T) {
 	p, _ := st.CreateProject("alpha")
 	st.CreateTask(p.ID, "still-todo", "", 2)
 	inProg, _ := st.CreateTask(p.ID, "working", "", 2)
-	st.UpdateTask(p.ID, inProg.ID, "", "", models.StatusInProgress, -1, "")
+	ipStatus := models.StatusInProgress
+	st.UpdateTask(p.ID, inProg.ID, store.TaskPatch{Status: &ipStatus})
 	done, _ := st.CreateTask(p.ID, "done-one", "", 2)
-	st.UpdateTask(p.ID, done.ID, "", "", models.StatusDone, -1, "")
+	doneStatus := models.StatusDone
+	st.UpdateTask(p.ID, done.ID, store.TaskPatch{Status: &doneStatus})
 
 	out := callTool(st, mcpContext{}, "segments_recent", map[string]interface{}{"project_id": p.ID})
 	var got []map[string]interface{}
@@ -1293,9 +1300,10 @@ func TestMCPRecent_CombinesAcrossProjectsWhenIDOmitted(t *testing.T) {
 	pb, _ := st.CreateProject("beta")
 	ta, _ := st.CreateTask(pa.ID, "alpha-task", "alpha body", 2)
 	tb, _ := st.CreateTask(pb.ID, "beta-task", "beta body", 2)
-	st.UpdateTask(pa.ID, ta.ID, "", "", models.StatusDone, -1, "")
+	done := models.StatusDone
+	st.UpdateTask(pa.ID, ta.ID, store.TaskPatch{Status: &done})
 	time.Sleep(20 * time.Millisecond)
-	st.UpdateTask(pb.ID, tb.ID, "", "", models.StatusDone, -1, "")
+	st.UpdateTask(pb.ID, tb.ID, store.TaskPatch{Status: &done})
 
 	out := callTool(st, mcpContext{}, "segments_recent", map[string]interface{}{})
 	var got []map[string]interface{}
@@ -1327,8 +1335,9 @@ func TestMCPRecent_ScopedToProjectExcludesOthers(t *testing.T) {
 	pb, _ := st.CreateProject("beta")
 	ta, _ := st.CreateTask(pa.ID, "alpha-task", "", 2)
 	tb, _ := st.CreateTask(pb.ID, "beta-task", "", 2)
-	st.UpdateTask(pa.ID, ta.ID, "", "", models.StatusDone, -1, "")
-	st.UpdateTask(pb.ID, tb.ID, "", "", models.StatusDone, -1, "")
+	done := models.StatusDone
+	st.UpdateTask(pa.ID, ta.ID, store.TaskPatch{Status: &done})
+	st.UpdateTask(pb.ID, tb.ID, store.TaskPatch{Status: &done})
 
 	out := callTool(st, mcpContext{}, "segments_recent", map[string]interface{}{"project_id": pa.ID})
 	var got []map[string]interface{}
@@ -1478,7 +1487,8 @@ func TestRunList_NoRecentFlagAccepted(t *testing.T) {
 	st := store.NewStore(dir)
 	p, _ := st.CreateProject("alpha")
 	tk, _ := st.CreateTask(p.ID, "t", "", 2)
-	st.UpdateTask(p.ID, tk.ID, "", "", models.StatusDone, -1, "")
+	done := models.StatusDone
+	st.UpdateTask(p.ID, tk.ID, store.TaskPatch{Status: &done})
 
 	if err := runList(st, []string{p.ID, "--no-recent"}); err != nil {
 		t.Fatalf("runList --no-recent failed: %v", err)
@@ -1522,9 +1532,11 @@ func TestBuildContextPayload_SegmentsContextBlock(t *testing.T) {
 	p, _ := st.CreateProject("alpha")
 	beta, _ := st.CreateProject("beta")
 	ip, _ := st.CreateTask(p.ID, "active work", "", 2)
-	st.UpdateTask(p.ID, ip.ID, "", "", models.StatusInProgress, -1, "")
+	ipStatus := models.StatusInProgress
+	st.UpdateTask(p.ID, ip.ID, store.TaskPatch{Status: &ipStatus})
 	closed, _ := st.CreateTask(p.ID, "shipped yesterday", "body text", 2)
-	st.UpdateTask(p.ID, closed.ID, "", "", models.StatusDone, -1, "")
+	doneStatus := models.StatusDone
+	st.UpdateTask(p.ID, closed.ID, store.TaskPatch{Status: &doneStatus})
 	// A task in the other project must NOT appear in the output.
 	other, _ := st.CreateTask(beta.ID, "beta ready task", "", 2)
 

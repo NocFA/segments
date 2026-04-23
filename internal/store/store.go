@@ -427,46 +427,53 @@ func (s *Store) ListTasks(projectID string) ([]models.Task, error) {
 	return tasks, nil
 }
 
-func (s *Store) UpdateTask(projectID, taskID string, title, body string, status models.TaskStatus, priority int, blockedBy string) (*models.Task, error) {
+type TaskPatch struct {
+	Title     *string
+	Body      *string
+	Status    *models.TaskStatus
+	Priority  *int
+	BlockedBy *[]string
+}
+
+func (s *Store) UpdateTask(projectID, taskID string, patch TaskPatch) (*models.Task, error) {
 	existing, err := s.GetTask(projectID, taskID)
 	if err != nil {
 		return nil, err
 	}
 
 	now := time.Now()
-	if title == "" {
-		title = existing.Title
-	}
-	if body == "" {
-		body = existing.Body
-	}
-	if status == "" {
-		status = existing.Status
-	}
-	if priority < 0 {
-		priority = existing.Priority
-	}
-	blockedByVal := blockedBy
-	if blockedByVal == "" {
-		blockedByVal = existing.BlockedBy
-	}
 	updated := &models.Task{
 		ID:        taskID,
 		ProjectID: projectID,
-		Title:     title,
-		Status:    status,
-		Priority:  priority,
-		Body:      body,
-		BlockedBy: blockedByVal,
+		Title:     existing.Title,
+		Status:    existing.Status,
+		Priority:  existing.Priority,
+		Body:      existing.Body,
+		BlockedBy: existing.BlockedBy,
 		CreatedAt: existing.CreatedAt,
 		UpdatedAt: now,
 		ClosedAt:  existing.ClosedAt,
 		SortOrder: existing.SortOrder,
 	}
+	if patch.Title != nil {
+		updated.Title = *patch.Title
+	}
+	if patch.Body != nil {
+		updated.Body = *patch.Body
+	}
+	if patch.Status != nil {
+		updated.Status = *patch.Status
+	}
+	if patch.Priority != nil {
+		updated.Priority = *patch.Priority
+	}
+	if patch.BlockedBy != nil {
+		updated.BlockedBy = append([]string(nil), (*patch.BlockedBy)...)
+	}
 
-	if (status == models.StatusDone || status == models.StatusClosed) && existing.ClosedAt == nil {
+	if (updated.Status == models.StatusDone || updated.Status == models.StatusClosed) && existing.ClosedAt == nil {
 		updated.ClosedAt = &now
-	} else if status != models.StatusDone && status != models.StatusClosed {
+	} else if updated.Status != models.StatusDone && updated.Status != models.StatusClosed {
 		updated.ClosedAt = nil
 	}
 
