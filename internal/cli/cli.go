@@ -2922,46 +2922,20 @@ func runContext(s *store.Store) error {
 // buildContextPayload assembles the additionalContext string emitted by
 // `segments context`. The stable "how to use Segments" prose lives in
 // mcpServerInstructions (surfaced by MCP clients without 2KB truncation);
-// this hook emits only per-session-variable content so the whole payload
-// stays under the Claude Code 2KB inline preview window. Order matters:
-// segmentsContext banner first so it lands in-frame even if the tail is
-// truncated. Returns "" when there is nothing to inject (no projects).
+// this hook emits only the CWD-resolved project's live state (in-progress
+// + recently closed) so the payload stays small. Cross-project state is
+// intentionally not dumped: the agent can call segments_list_projects or
+// segments_recent on demand. Returns "" when the banner is disabled or
+// there are no projects.
 func buildContextPayload(s *store.Store, cfg *server.Config) string {
+	if !sessionStartInjectEnabled(cfg) {
+		return ""
+	}
 	projects, err := s.ListProjects()
 	if err != nil || len(projects) == 0 {
 		return ""
 	}
-
-	var lines []string
-	if sessionStartInjectEnabled(cfg) {
-		if block := segmentsContextBlock(s, projects); block != "" {
-			lines = append(lines, block, "")
-		}
-	}
-	for _, p := range projects {
-		tasks, _ := s.ListTasks(p.ID)
-		g := groupTasksForContext(tasks)
-		lines = append(lines, fmt.Sprintf("Project: %s  project_id=%s  (%d tasks: %d todo [%d ready], %d in progress, %d done, %d blockers)",
-			p.Name, p.ID, len(tasks), g.todoCount, len(g.ready), g.inProgressCount, g.doneCount, g.blockerCount))
-		if len(g.inProgress) > 0 {
-			lines = append(lines, "  In progress:")
-			lines = append(lines, g.inProgress...)
-		}
-		if len(g.ready) > 0 {
-			lines = append(lines, "  Ready queue (unblocked -- pick from here):")
-			lines = append(lines, g.ready...)
-		}
-		if len(g.blocked) > 0 {
-			lines = append(lines, "  Blocked (waiting on a dependency):")
-			lines = append(lines, g.blocked...)
-		}
-		if len(g.blockers) > 0 {
-			lines = append(lines, "  Blockers (status=blocker, investigate):")
-			lines = append(lines, g.blockers...)
-		}
-	}
-
-	return strings.Join(lines, "\n")
+	return segmentsContextBlock(s, projects)
 }
 
 // sessionStartInjectEnabled returns true when the segmentsContext block should
@@ -2975,22 +2949,21 @@ func sessionStartInjectEnabled(cfg *server.Config) bool {
 }
 
 // segmentsContextBlock renders the compact SessionStart banner: CWD-resolved
-// project, up to 5 in-progress tasks, up to 5 recently closed tasks. Target
-// size is <2KB so it does not crowd the agent's context. When no project
-// matches the CWD basename, emits a "<none>" stanza listing available
-// projects so the agent knows what to pass as a hint.
+// project, up to 5 in-progress tasks, up to 5 recently closed tasks. When no
+// project matches the CWD basename, emits a terse one-liner pointing at
+// segments_list_projects (plus a git hint if CWD is a git repo); the agent
+// can pull project data on demand instead of paying for a dump every session.
 func segmentsContextBlock(s *store.Store, projects []models.Project) string {
 	proj := resolveProject(projects, "")
 	var b strings.Builder
 	b.WriteString("# segmentsContext\n")
 	if proj == nil {
 		cwd, _ := os.Getwd()
-		b.WriteString(fmt.Sprintf("Project: <none> (CWD basename %q does not match any project; pass project_id explicitly)\n", filepath.Base(cwd)))
-		b.WriteString("Available projects:\n")
-		for _, p := range projects {
-			b.WriteString(fmt.Sprintf("  %s  %s\n", p.ID[:8], p.Name))
+		b.WriteString(fmt.Sprintf("No Segments project matches CWD basename %q. Call segments_list_projects to pick one, or `sg init` to create one.", filepath.Base(cwd)))
+		if _, err := os.Stat(filepath.Join(cwd, ".git")); err == nil {
+			b.WriteString("\nGit repo detected: `git log --oneline -20` for recent history.")
 		}
-		return strings.TrimRight(b.String(), "\n")
+		return b.String()
 	}
 	b.WriteString(fmt.Sprintf("Project: %s  project_id=%s\n", proj.Name, proj.ID))
 
@@ -3033,57 +3006,6 @@ func segmentsContextBlock(s *store.Store, projects []models.Project) string {
 		b.WriteString(fmt.Sprintf("  %s  %s (%s)\n", e.Task.ID[:8], e.Task.Title, relativeAgo(ts)))
 	}
 	return strings.TrimRight(b.String(), "\n")
-}
-
-type contextTaskGroups struct {
-	inProgress                                            []string
-	ready                                                 []string
-	blocked                                               []string
-	blockers                                              []string
-	todoCount, inProgressCount, doneCount, blockerCount int
-}
-
-func groupTasksForContext(tasks []models.Task) contextTaskGroups {
-	byID := make(map[string]models.Task, len(tasks))
-	for _, t := range tasks {
-		byID[t.ID] = t
-	}
-	format := func(t models.Task) string {
-		entry := fmt.Sprintf("    [%s] %s  task_id=%s", t.Status, t.Title, t.ID)
-		if t.Priority > 0 {
-			entry += fmt.Sprintf(" P%d", t.Priority)
-		}
-		if t.BlockedBy != "" {
-			entry += " blocked_by=" + t.BlockedBy
-		}
-		return entry
-	}
-	var g contextTaskGroups
-	for _, t := range tasks {
-		switch t.Status {
-		case models.StatusTodo:
-			g.todoCount++
-			if t.BlockedBy == "" {
-				g.ready = append(g.ready, format(t))
-				continue
-			}
-			blocker, ok := byID[t.BlockedBy]
-			if ok && blocker.Status == models.StatusDone {
-				g.ready = append(g.ready, format(t))
-			} else {
-				g.blocked = append(g.blocked, format(t))
-			}
-		case models.StatusInProgress:
-			g.inProgressCount++
-			g.inProgress = append(g.inProgress, format(t))
-		case models.StatusDone:
-			g.doneCount++
-		case models.StatusBlocker:
-			g.blockerCount++
-			g.blockers = append(g.blockers, format(t))
-		}
-	}
-	return g
 }
 
 func mcpServer(s *store.Store) error {

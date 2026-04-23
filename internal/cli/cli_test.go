@@ -63,100 +63,6 @@ func TestCallToolCreateTaskPriorityAsString(t *testing.T) {
 	}
 }
 
-func TestGroupTasksForContext_UnblockedTodoIsReady(t *testing.T) {
-	tasks := []models.Task{
-		{ID: "a", Title: "unblocked", Status: models.StatusTodo},
-	}
-	g := groupTasksForContext(tasks)
-	if len(g.ready) != 1 {
-		t.Fatalf("ready: got %d, want 1 (%v)", len(g.ready), g.ready)
-	}
-	if len(g.blocked) != 0 {
-		t.Fatalf("blocked: got %d, want 0 (%v)", len(g.blocked), g.blocked)
-	}
-	if g.todoCount != 1 {
-		t.Fatalf("todoCount: got %d, want 1", g.todoCount)
-	}
-	if !strings.Contains(g.ready[0], "task_id=a") {
-		t.Fatalf("ready entry missing task_id: %q", g.ready[0])
-	}
-}
-
-func TestGroupTasksForContext_PendingBlockerKeepsTodoBlocked(t *testing.T) {
-	tasks := []models.Task{
-		{ID: "boot", Title: "init", Status: models.StatusTodo},
-		{ID: "child", Title: "downstream", Status: models.StatusTodo, BlockedBy: "boot"},
-	}
-	g := groupTasksForContext(tasks)
-	if len(g.ready) != 1 || !strings.Contains(g.ready[0], "task_id=boot") {
-		t.Fatalf("expected only bootstrap ready, got %v", g.ready)
-	}
-	if len(g.blocked) != 1 || !strings.Contains(g.blocked[0], "task_id=child") {
-		t.Fatalf("expected child blocked, got %v", g.blocked)
-	}
-}
-
-func TestGroupTasksForContext_DoneBlockerUnblocksChild(t *testing.T) {
-	tasks := []models.Task{
-		{ID: "boot", Title: "init", Status: models.StatusDone},
-		{ID: "child", Title: "downstream", Status: models.StatusTodo, BlockedBy: "boot"},
-	}
-	g := groupTasksForContext(tasks)
-	if len(g.ready) != 1 || !strings.Contains(g.ready[0], "task_id=child") {
-		t.Fatalf("expected child ready after blocker done, got %v", g.ready)
-	}
-	if len(g.blocked) != 0 {
-		t.Fatalf("expected no blocked, got %v", g.blocked)
-	}
-	if g.doneCount != 1 {
-		t.Fatalf("doneCount: got %d, want 1", g.doneCount)
-	}
-}
-
-func TestGroupTasksForContext_AllStatusesPartitioned(t *testing.T) {
-	tasks := []models.Task{
-		{ID: "1", Title: "ready", Status: models.StatusTodo, Priority: 1},
-		{ID: "2", Title: "blocked", Status: models.StatusTodo, BlockedBy: "99"},
-		{ID: "3", Title: "working", Status: models.StatusInProgress, Priority: 2},
-		{ID: "4", Title: "finished", Status: models.StatusDone},
-		{ID: "5", Title: "wall", Status: models.StatusBlocker},
-		{ID: "6", Title: "dropped", Status: models.StatusClosed},
-	}
-	g := groupTasksForContext(tasks)
-	if len(g.ready) != 1 || !strings.Contains(g.ready[0], " P1") {
-		t.Fatalf("ready partition / priority annotation wrong: %v", g.ready)
-	}
-	if len(g.blocked) != 1 || !strings.Contains(g.blocked[0], "blocked_by=99") {
-		t.Fatalf("blocked partition / blocked_by annotation wrong: %v", g.blocked)
-	}
-	if len(g.inProgress) != 1 || !strings.Contains(g.inProgress[0], "[in_progress]") {
-		t.Fatalf("inProgress partition wrong: %v", g.inProgress)
-	}
-	if len(g.blockers) != 1 || !strings.Contains(g.blockers[0], "[blocker]") {
-		t.Fatalf("blockers partition wrong: %v", g.blockers)
-	}
-	if g.todoCount != 2 || g.inProgressCount != 1 || g.doneCount != 1 || g.blockerCount != 1 {
-		t.Fatalf("counts wrong: todo=%d inProg=%d done=%d blocker=%d", g.todoCount, g.inProgressCount, g.doneCount, g.blockerCount)
-	}
-}
-
-func TestGroupTasksForContext_PreservesInputOrder(t *testing.T) {
-	tasks := []models.Task{
-		{ID: "a", Title: "first", Status: models.StatusTodo},
-		{ID: "b", Title: "second", Status: models.StatusTodo},
-		{ID: "c", Title: "third", Status: models.StatusTodo},
-	}
-	g := groupTasksForContext(tasks)
-	if len(g.ready) != 3 {
-		t.Fatalf("expected 3 ready, got %d", len(g.ready))
-	}
-	if !strings.Contains(g.ready[0], "task_id=a") ||
-		!strings.Contains(g.ready[1], "task_id=b") ||
-		!strings.Contains(g.ready[2], "task_id=c") {
-		t.Fatalf("input order not preserved: %v", g.ready)
-	}
-}
-
 func TestSelectNextTask_OrderingByPriorityThenAge(t *testing.T) {
 	now := time.Now()
 	tasks := []models.Task{
@@ -1590,9 +1496,10 @@ func min(a, b int) int {
 }
 
 // TestBuildContextPayload_SegmentsContextBlock verifies the SessionStart
-// banner comes first (so it lands in-frame inside Claude Code's 2KB inline
-// preview), followed by the legacy tasks listing. Project resolved by CWD
-// basename, in-progress rows, and recently-closed rows with relative age.
+// banner emits the CWD-resolved project, its in-progress tasks, and its
+// recently-closed tasks with relative age. Cross-project dumps are intentionally
+// NOT included -- the agent calls segments_list_projects / segments_recent
+// on demand instead.
 func TestBuildContextPayload_SegmentsContextBlock(t *testing.T) {
 	dir, err := os.MkdirTemp("", "segments-ctx-block-")
 	if err != nil {
@@ -1613,25 +1520,17 @@ func TestBuildContextPayload_SegmentsContextBlock(t *testing.T) {
 
 	st := store.NewStore(dir)
 	p, _ := st.CreateProject("alpha")
-	st.CreateProject("beta")
+	beta, _ := st.CreateProject("beta")
 	ip, _ := st.CreateTask(p.ID, "active work", "", 2)
 	st.UpdateTask(p.ID, ip.ID, "", "", models.StatusInProgress, -1, "")
 	closed, _ := st.CreateTask(p.ID, "shipped yesterday", "body text", 2)
 	st.UpdateTask(p.ID, closed.ID, "", "", models.StatusDone, -1, "")
+	// A task in the other project must NOT appear in the output.
+	other, _ := st.CreateTask(beta.ID, "beta ready task", "", 2)
 
 	out := buildContextPayload(st, &server.Config{})
 	if !strings.Contains(out, "# segmentsContext") {
 		t.Fatalf("segmentsContext block missing:\n%s", out)
-	}
-	// Banner must come first so it lands inside Claude Code's 2KB inline
-	// preview window. Legacy listing follows.
-	bannerIdx := strings.Index(out, "# segmentsContext")
-	legacyIdx := strings.Index(out, "Project: alpha  project_id="+p.ID+"  (")
-	if legacyIdx < 0 {
-		t.Fatalf("legacy tasks listing missing:\n%s", out)
-	}
-	if bannerIdx > legacyIdx {
-		t.Errorf("segmentsContext banner must precede legacy listing; banner=%d legacy=%d", bannerIdx, legacyIdx)
 	}
 	if !strings.Contains(out, "Project: alpha  project_id="+p.ID) {
 		t.Errorf("expected CWD-resolved project alpha, got:\n%s", out)
@@ -1648,10 +1547,14 @@ func TestBuildContextPayload_SegmentsContextBlock(t *testing.T) {
 	if !strings.Contains(out, closed.ID[:8]+"  shipped yesterday (") {
 		t.Errorf("recent-closed row missing:\n%s", out)
 	}
+	// Other projects must not leak into the banner.
+	if strings.Contains(out, "beta") || strings.Contains(out, other.ID[:8]) {
+		t.Errorf("cross-project content leaked into banner:\n%s", out)
+	}
 }
 
 // TestBuildContextPayload_OptOut verifies setting session_start_inject=false
-// suppresses the segmentsContext block while leaving the legacy listing.
+// suppresses the hook output entirely.
 func TestBuildContextPayload_OptOut(t *testing.T) {
 	dir, err := os.MkdirTemp("", "segments-ctx-optout-")
 	if err != nil {
@@ -1666,16 +1569,13 @@ func TestBuildContextPayload_OptOut(t *testing.T) {
 
 	off := false
 	out := buildContextPayload(st, &server.Config{SessionStartInject: &off})
-	if strings.Contains(out, "# segmentsContext") {
-		t.Errorf("segmentsContext block leaked under opt-out:\n%s", out)
-	}
-	if !strings.Contains(out, "Project: alpha") {
-		t.Errorf("legacy listing missing under opt-out:\n%s", out)
+	if out != "" {
+		t.Errorf("expected empty payload under opt-out, got:\n%s", out)
 	}
 }
 
-// TestSegmentsContextBlock_NoCWDMatch verifies the no-match stanza lists
-// available projects so the agent can pass project_id explicitly.
+// TestSegmentsContextBlock_NoCWDMatch verifies the no-match stanza is a terse
+// one-liner pointing at segments_list_projects -- no verbose project dump.
 func TestSegmentsContextBlock_NoCWDMatch(t *testing.T) {
 	dir, err := os.MkdirTemp("", "segments-ctx-nomatch-")
 	if err != nil {
@@ -1700,14 +1600,55 @@ func TestSegmentsContextBlock_NoCWDMatch(t *testing.T) {
 	projects, _ := st.ListProjects()
 
 	out := segmentsContextBlock(st, projects)
-	if !strings.Contains(out, "Project: <none>") {
-		t.Errorf("expected <none> stanza, got:\n%s", out)
+	if !strings.Contains(out, "No Segments project matches CWD basename") {
+		t.Errorf("expected terse no-match one-liner, got:\n%s", out)
 	}
-	if !strings.Contains(out, "Available projects:") {
-		t.Errorf("expected available-projects list, got:\n%s", out)
+	if !strings.Contains(out, "segments_list_projects") {
+		t.Errorf("expected pointer to segments_list_projects, got:\n%s", out)
 	}
-	if !strings.Contains(out, "alpha") || !strings.Contains(out, "beta") {
-		t.Errorf("both project names should be listed, got:\n%s", out)
+	// No project list dump allowed: the old behavior printed every project
+	// name, which defeats the compaction goal.
+	if strings.Contains(out, "Available projects:") {
+		t.Errorf("old verbose project list leaked, got:\n%s", out)
+	}
+	if strings.Contains(out, "alpha") || strings.Contains(out, "beta") {
+		t.Errorf("project names should NOT be listed, got:\n%s", out)
+	}
+}
+
+// TestSegmentsContextBlock_NoCWDMatch_GitHint verifies that when CWD has a
+// .git directory we append a short pointer to `git log`.
+func TestSegmentsContextBlock_NoCWDMatch_GitHint(t *testing.T) {
+	dir, err := os.MkdirTemp("", "segments-ctx-githint-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+	t.Setenv("SEGMENTS_DATA_DIR", dir)
+
+	origWD, _ := os.Getwd()
+	cwd := filepath.Join(dir, "somerepo")
+	if err := os.MkdirAll(filepath.Join(cwd, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(cwd); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(origWD)
+
+	st := store.NewStore(dir)
+	// Two projects prevent resolveProject's single-project fallback from
+	// latching on -- we need genuine no-match to hit the git-hint branch.
+	st.CreateProject("alpha")
+	st.CreateProject("beta")
+	projects, _ := st.ListProjects()
+
+	out := segmentsContextBlock(st, projects)
+	if !strings.Contains(out, "Git repo detected") {
+		t.Errorf("expected git hint when .git present, got:\n%s", out)
+	}
+	if !strings.Contains(out, "git log") {
+		t.Errorf("expected `git log` pointer, got:\n%s", out)
 	}
 }
 
