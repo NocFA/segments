@@ -16,6 +16,18 @@ Built as a faster, leaner alternative to Beads.
 
 **Segments is a work in progress.** The core is stable enough that I use it daily, but it has not had wide exposure yet, so builds and tagged releases are expected to ship with bugs. If you hit one, please [open an issue](https://git.nocfa.net/NocFA/segments/issues/new/choose) -- the template will prompt for OS, architecture, `sg version` output, and repro steps. Fast feedback is the quickest way to sand down the rough edges.
 
+## Roadmap
+
+| Series | Focus | Status |
+|--------|-------|--------|
+| **0.1** | Foundation -- LMDB storage, core CLI (add / done / close / list), initial MCP integrations, Pi extension, basic web UI | Released |
+| **0.2** | TUI -- CLI ergonomics, bubbletea confirm/select widgets, sg init / view / remove, Windows daemon, multi-scope setup | Released |
+| **0.3** | GUI -- three-theme web UI (Obsidian / Console / Dossier), Graph / Kanban / List views, command palette, keyboard-first navigation, sg next / stats / export | Released |
+| **0.4** | MCP + session polish -- globally addressable task IDs, SessionStart hook, schema-deferral fix, stdio shim for multi-client MCP, recent-work tooling | In progress |
+| **0.5** | Optimisation -- memory footprint, startup latency, binary size, LMDB env tuning | Planned |
+| **0.6** | GUI polish -- sorting controls, filters, drag improvements, visual refinements, bug sweep | Planned |
+| **0.7+** | Ongoing polish, security hardening | Planned |
+
 ## Why
 
 Got fed up with Beads. It's slow, it's heavy, and it leans on a Dolt DB infrastructure that's miserable to live with. Segments is a leaner, faster alternative: same job, single binary, LMDB under the hood, no Dolt, no fuss. It's especially nice for solo power users, but nothing stops you from reverse-proxying the dashboard for a team, or orchestrating downstream actions off its state.
