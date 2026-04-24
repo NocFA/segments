@@ -3,18 +3,17 @@ package store
 import (
 	"errors"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"codeberg.org/nocfa/segments/internal/models"
 )
 
 func setupTest(t *testing.T) (*Store, func()) {
-	tmp, err := os.MkdirTemp("", "segments-test")
-	if err != nil {
-		t.Fatal(err)
-	}
+	tmp := t.TempDir()
 	s := NewStore(tmp)
-	return s, func() { os.RemoveAll(tmp) }
+	t.Cleanup(func() { s.Close() })
+	return s, func() {}
 }
 
 func TestCreateProject(t *testing.T) {
@@ -432,5 +431,65 @@ func TestFindTaskAny_AmbiguousPrefix(t *testing.T) {
 	}
 	if !foundAmbig {
 		t.Log("no ambiguous-across-projects hex prefix in this run (UUIDs randomly don't overlap); unusual but not a bug")
+	}
+}
+
+func TestCompactReducesFileAndPreservesTasks(t *testing.T) {
+	s, cleanup := setupTest(t)
+	defer cleanup()
+
+	proj, err := s.CreateProject("compactable")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	originals := make([]*models.Task, 0, 10)
+	for i := 0; i < 10; i++ {
+		tk, err := s.CreateTask(proj.ID, "task", "payload body", 2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		originals = append(originals, tk)
+	}
+
+	// Deleting then re-creating inflates the freelist so compact has work to do.
+	for i := 0; i < 5; i++ {
+		if err := s.DeleteTask(proj.ID, originals[i].ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i < 5; i++ {
+		if _, err := s.CreateTask(proj.ID, "churn", "more churn", 2); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	dataPath := filepath.Join(s.basePath, "projects", proj.ID, "data.mdb")
+	beforeInfo, err := os.Stat(dataPath)
+	if err != nil {
+		t.Fatalf("stat data.mdb: %v", err)
+	}
+
+	before, after, err := s.Compact(proj.ID)
+	if err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+	if before != beforeInfo.Size() {
+		t.Errorf("reported before=%d, stat before=%d", before, beforeInfo.Size())
+	}
+	if after >= before {
+		t.Errorf("compact did not shrink: before=%d after=%d", before, after)
+	}
+
+	// Surviving task IDs must still resolve post-compact.
+	for i := 5; i < 10; i++ {
+		got, err := s.GetTask(proj.ID, originals[i].ID)
+		if err != nil {
+			t.Errorf("GetTask %s post-compact: %v", originals[i].ID, err)
+			continue
+		}
+		if got.Title != originals[i].Title || got.Body != originals[i].Body {
+			t.Errorf("task mutated by compact: got %+v, want %+v", got, originals[i])
+		}
 	}
 }

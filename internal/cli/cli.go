@@ -331,6 +331,10 @@ var cmdGroups = []struct {
 		{"remove", "remove a project", nil},
 		{"uninstall", "remove segments and all data", nil},
 	}},
+	{"Maintenance", []cmdInfo{
+		{"compact", "reclaim disk by compacting each project's LMDB file", nil},
+		{"doctor", "host health checks (use --clean-temp to reclaim leaked temp dirs)", nil},
+	}},
 	{"Info", []cmdInfo{
 		{"help", "show this help", []string{"-h", "--help", "-help"}},
 		{"version", "print version", nil},
@@ -495,6 +499,10 @@ func Run(args []string, version string) error {
 		return runRemoveProject(s, rest)
 	case "uninstall":
 		return runUninstall()
+	case "compact":
+		return runCompact(s, rest)
+	case "doctor":
+		return runDoctor(rest)
 	case "version":
 		fmt.Println(version)
 		return nil
@@ -4498,4 +4506,155 @@ func findInPath(cmd string) string {
 		}
 	}
 	return ""
+}
+
+func humanBytes(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%dB", n)
+	}
+	div, exp := int64(unit), 0
+	for m := n / unit; m >= unit; m /= unit {
+		div *= unit
+		exp++
+	}
+	suffix := "KMGTP"[exp]
+	return fmt.Sprintf("%.1f%c", float64(n)/float64(div), suffix)
+}
+
+func runCompact(s *store.Store, args []string) error {
+	_ = args
+	if isRunning() {
+		return fmt.Errorf("segments is running; stop it first with '%s'", cyan.Render("sg stop"))
+	}
+
+	projects, err := s.ListProjects()
+	if err != nil {
+		return err
+	}
+	if len(projects) == 0 {
+		fmt.Println("no projects to compact")
+		return nil
+	}
+
+	var totalBefore, totalAfter int64
+	for _, p := range projects {
+		before, after, err := s.Compact(p.ID)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "  %s  %s: %v\n", red.Render("x"), p.Name, err)
+			continue
+		}
+		totalBefore += before
+		totalAfter += after
+		fmt.Printf("  %s  %s  %s -> %s\n",
+			green.Render("✓"),
+			p.Name,
+			humanBytes(before),
+			humanBytes(after),
+		)
+	}
+	fmt.Println()
+	fmt.Printf("  total: %s -> %s (reclaimed %s)\n",
+		humanBytes(totalBefore),
+		humanBytes(totalAfter),
+		humanBytes(totalBefore-totalAfter),
+	)
+	return nil
+}
+
+func runDoctor(args []string) error {
+	var cleanTemp bool
+	for _, a := range args {
+		if a == "--clean-temp" {
+			cleanTemp = true
+		}
+	}
+	if !cleanTemp {
+		fmt.Println("usage: sg doctor --clean-temp")
+		fmt.Println()
+		fmt.Println("  --clean-temp   delete segments-* dirs in TEMP older than 24h")
+		return nil
+	}
+
+	tmp := os.TempDir()
+	entries, err := os.ReadDir(tmp)
+	if err != nil {
+		return err
+	}
+
+	cutoff := time.Now().Add(-24 * time.Hour)
+	type victim struct {
+		path string
+		size int64
+	}
+	var victims []victim
+	var total int64
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if !strings.HasPrefix(name, "segments-") {
+			continue
+		}
+		full := filepath.Join(tmp, name)
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		if info.ModTime().After(cutoff) {
+			continue
+		}
+		size := dirSize(full)
+		victims = append(victims, victim{path: full, size: size})
+		total += size
+	}
+
+	if len(victims) == 0 {
+		fmt.Println("no leaked segments-* dirs older than 24h in " + tmp)
+		return nil
+	}
+
+	for _, v := range victims {
+		fmt.Printf("  %s  %s\n", humanBytes(v.size), v.path)
+	}
+	fmt.Println()
+	fmt.Printf("  reclaiming %s across %d dir(s)...\n", humanBytes(total), len(victims))
+
+	var reclaimed int64
+	var failed int
+	for _, v := range victims {
+		if err := os.RemoveAll(v.path); err != nil {
+			fmt.Fprintf(os.Stderr, "  %s  %s: %v\n", red.Render("x"), v.path, err)
+			failed++
+			continue
+		}
+		reclaimed += v.size
+	}
+	fmt.Println()
+	fmt.Printf("  freed %s", humanBytes(reclaimed))
+	if failed > 0 {
+		fmt.Printf(" (%d dir(s) failed)", failed)
+	}
+	fmt.Println()
+	return nil
+}
+
+func dirSize(root string) int64 {
+	var total int64
+	filepath.WalkDir(root, func(_ string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return nil
+		}
+		total += info.Size()
+		return nil
+	})
+	return total
 }

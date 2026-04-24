@@ -16,6 +16,11 @@ import (
 
 var ErrTaskNotFound = errors.New("task not found")
 
+const (
+	initialMapSize int64 = 8 << 20
+	maxMapSize     int64 = 2 << 30
+)
+
 type TaskMatch struct {
 	Task      *models.Task
 	ProjectID string
@@ -54,7 +59,7 @@ func (s *Store) openEnv(projectID string) (*lmdb.Env, error) {
 		return nil, err
 	}
 
-	err = env.SetMapSize(1 << 30)
+	err = env.SetMapSize(initialMapSize)
 	if err != nil {
 		return nil, err
 	}
@@ -70,7 +75,7 @@ func (s *Store) openEnv(projectID string) (*lmdb.Env, error) {
 		if err != nil {
 			return nil, err
 		}
-		env.SetMapSize(1 << 30)
+		env.SetMapSize(initialMapSize)
 		env.SetMaxDBs(2)
 		err = env.Open(envPath, lmdb.Create, 0664)
 		if err != nil {
@@ -80,6 +85,42 @@ func (s *Store) openEnv(projectID string) (*lmdb.Env, error) {
 
 	s.envs.Store(projectID, &envCache{env: env})
 	return env, nil
+}
+
+func updateWithGrow(env *lmdb.Env, fn lmdb.TxnOp) error {
+	for {
+		err := env.Update(fn)
+		if err == nil {
+			return nil
+		}
+		if !lmdb.IsMapFull(err) {
+			return err
+		}
+		info, ierr := env.Info()
+		if ierr != nil {
+			return err
+		}
+		if info.MapSize >= maxMapSize {
+			return err
+		}
+		next := info.MapSize * 2
+		if next > maxMapSize {
+			next = maxMapSize
+		}
+		if serr := env.SetMapSize(next); serr != nil {
+			return err
+		}
+	}
+}
+
+func (s *Store) Close() {
+	s.envs.Range(func(key, value interface{}) bool {
+		s.envs.Delete(key)
+		if ec, ok := value.(*envCache); ok && ec.env != nil {
+			ec.env.Close()
+		}
+		return true
+	})
 }
 
 func (s *Store) CreateProject(name string) (*models.Project, error) {
@@ -240,7 +281,7 @@ func (s *Store) NextSortOrder(projectID string) (int, error) {
 
 func (s *Store) ensureTasksDBI(env *lmdb.Env) (lmdb.DBI, error) {
 	var dbi lmdb.DBI
-	err := env.Update(func(txn *lmdb.Txn) error {
+	err := updateWithGrow(env, func(txn *lmdb.Txn) error {
 		var err error
 		dbi, err = txn.OpenDBI("tasks", lmdb.Create)
 		return err
@@ -282,7 +323,7 @@ func (s *Store) CreateTask(projectID, title, body string, priority int) (*models
 		return nil, err
 	}
 
-	err = env.Update(func(txn *lmdb.Txn) error {
+	err = updateWithGrow(env, func(txn *lmdb.Txn) error {
 		return txn.Put(dbi, []byte(task.ID), data, 0)
 	})
 
@@ -487,7 +528,7 @@ func (s *Store) UpdateTask(projectID, taskID string, patch TaskPatch) (*models.T
 		return nil, err
 	}
 
-	err = env.Update(func(txn *lmdb.Txn) error {
+	err = updateWithGrow(env, func(txn *lmdb.Txn) error {
 		dbi, err := txn.OpenDBI("tasks", 0)
 		if err != nil {
 			return err
@@ -509,7 +550,7 @@ func (s *Store) DeleteTask(projectID, taskID string) error {
 		return err
 	}
 
-	return env.Update(func(txn *lmdb.Txn) error {
+	return updateWithGrow(env, func(txn *lmdb.Txn) error {
 		dbi, err := txn.OpenDBI("tasks", 0)
 		if err != nil {
 			return err
@@ -517,4 +558,69 @@ func (s *Store) DeleteTask(projectID, taskID string) error {
 
 		return txn.Del(dbi, []byte(taskID), nil)
 	})
+}
+
+func (s *Store) Compact(projectID string) (int64, int64, error) {
+	projDir := filepath.Join(s.basePath, "projects", projectID)
+	dataPath := filepath.Join(projDir, "data.mdb")
+	lockPath := filepath.Join(projDir, "lock.mdb")
+
+	env, err := s.openEnv(projectID)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	before, err := fileSize(dataPath)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	stageDir := filepath.Join(s.basePath, "projects", projectID+".compact")
+	if err := os.RemoveAll(stageDir); err != nil {
+		return 0, 0, err
+	}
+	if err := os.MkdirAll(stageDir, 0755); err != nil {
+		return 0, 0, err
+	}
+
+	if err := env.CopyFlag(stageDir, lmdb.CopyCompact); err != nil {
+		os.RemoveAll(stageDir)
+		return 0, 0, err
+	}
+
+	if v, ok := s.envs.LoadAndDelete(projectID); ok {
+		if ec, ok := v.(*envCache); ok && ec.env != nil {
+			ec.env.Close()
+		}
+	}
+
+	if err := os.Remove(dataPath); err != nil && !os.IsNotExist(err) {
+		os.RemoveAll(stageDir)
+		return 0, 0, err
+	}
+	if err := os.Remove(lockPath); err != nil && !os.IsNotExist(err) {
+		os.RemoveAll(stageDir)
+		return 0, 0, err
+	}
+
+	stageData := filepath.Join(stageDir, "data.mdb")
+	if err := os.Rename(stageData, dataPath); err != nil {
+		os.RemoveAll(stageDir)
+		return 0, 0, err
+	}
+	os.RemoveAll(stageDir)
+
+	after, err := fileSize(dataPath)
+	if err != nil {
+		return before, 0, err
+	}
+	return before, after, nil
+}
+
+func fileSize(path string) (int64, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0, err
+	}
+	return info.Size(), nil
 }

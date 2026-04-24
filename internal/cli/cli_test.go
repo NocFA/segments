@@ -161,12 +161,7 @@ func TestSelectNextTask_FiltersNonTodoAndBlocked(t *testing.T) {
 }
 
 func TestMCP_AgentCaptureInEvents(t *testing.T) {
-	// Use MkdirTemp (not t.TempDir) because LMDB holds OS file handles on
-	// Windows that outlive the test body, which makes t.TempDir cleanup fail.
-	dir, err := os.MkdirTemp("", "segments-mcp-analytics-")
-	if err != nil {
-		t.Fatal(err)
-	}
+	dir := t.TempDir()
 	t.Setenv("SEGMENTS_DATA_DIR", dir)
 
 	eventPath := filepath.Join(dir, "events.jsonl")
@@ -177,6 +172,7 @@ func TestMCP_AgentCaptureInEvents(t *testing.T) {
 	defer setMCPAgent("", "")
 
 	st := store.NewStore(dir)
+	t.Cleanup(func() { st.Close() })
 	proj, err := st.CreateProject("analytics-test")
 	if err != nil {
 		t.Fatalf("create project: %v", err)
@@ -395,12 +391,9 @@ func TestMCPToolDefsPriorityAndBlockedByCues(t *testing.T) {
 // teach the claim semantic. Without this nudge LLMs default to N individual
 // calls.
 func TestRunExportWritesSnapshotJSONL(t *testing.T) {
-	baseDir, err := os.MkdirTemp("", "segments-cli-export-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(baseDir)
+	baseDir := t.TempDir()
 	s := store.NewStore(baseDir)
+	t.Cleanup(func() { s.Close() })
 
 	proj, err := s.CreateProject("demo")
 	if err != nil {
@@ -413,12 +406,7 @@ func TestRunExportWritesSnapshotJSONL(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	outDir, err := os.MkdirTemp("", "segments-cli-out-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(outDir)
-	outPath := filepath.Join(outDir, "tasks.jsonl")
+	outPath := filepath.Join(t.TempDir(), "tasks.jsonl")
 
 	if err := runExport(s, []string{"--path", outPath}); err != nil {
 		t.Fatalf("runExport: %v", err)
@@ -454,12 +442,9 @@ func TestRunExportWritesSnapshotJSONL(t *testing.T) {
 
 func TestRunExportDefaultsToCurrentProject(t *testing.T) {
 	t.Setenv("SEGMENTS_PROJECT_ID", "")
-	baseDir, err := os.MkdirTemp("", "segments-cli-export-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(baseDir)
+	baseDir := t.TempDir()
 	s := store.NewStore(baseDir)
+	t.Cleanup(func() { s.Close() })
 
 	other, err := s.CreateProject("other")
 	if err != nil {
@@ -518,12 +503,9 @@ func TestRunExportDefaultsToCurrentProject(t *testing.T) {
 
 func TestRunExportAmbiguousProjectsErrors(t *testing.T) {
 	t.Setenv("SEGMENTS_PROJECT_ID", "")
-	baseDir, err := os.MkdirTemp("", "segments-cli-export-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(baseDir)
+	baseDir := t.TempDir()
 	s := store.NewStore(baseDir)
+	t.Cleanup(func() { s.Close() })
 	if _, err := s.CreateProject("foo"); err != nil {
 		t.Fatal(err)
 	}
@@ -538,7 +520,7 @@ func TestRunExportAmbiguousProjectsErrors(t *testing.T) {
 	}
 	t.Chdir(workDir)
 
-	err = runExport(s, []string{"--path", filepath.Join(t.TempDir(), "x.jsonl")})
+	err := runExport(s, []string{"--path", filepath.Join(t.TempDir(), "x.jsonl")})
 	if err == nil {
 		t.Fatal("expected error for ambiguous resolution")
 	}
@@ -549,12 +531,9 @@ func TestRunExportAmbiguousProjectsErrors(t *testing.T) {
 
 func TestRunExportAllWritesToDataDir(t *testing.T) {
 	t.Setenv("SEGMENTS_PROJECT_ID", "")
-	baseDir, err := os.MkdirTemp("", "segments-cli-export-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(baseDir)
+	baseDir := t.TempDir()
 	s := store.NewStore(baseDir)
+	t.Cleanup(func() { s.Close() })
 	if _, err := s.CreateProject("one"); err != nil {
 		t.Fatal(err)
 	}
@@ -595,12 +574,9 @@ func TestRunExportAllWritesToDataDir(t *testing.T) {
 
 func TestRunExportPathOverridesAllDefault(t *testing.T) {
 	t.Setenv("SEGMENTS_PROJECT_ID", "")
-	baseDir, err := os.MkdirTemp("", "segments-cli-export-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(baseDir)
+	baseDir := t.TempDir()
 	s := store.NewStore(baseDir)
+	t.Cleanup(func() { s.Close() })
 	if _, err := s.CreateProject("one"); err != nil {
 		t.Fatal(err)
 	}
@@ -626,17 +602,14 @@ func TestRunExportPathOverridesAllDefault(t *testing.T) {
 }
 
 func TestRunExportAllAndProjectRejected(t *testing.T) {
-	baseDir, err := os.MkdirTemp("", "segments-cli-export-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(baseDir)
+	baseDir := t.TempDir()
 	s := store.NewStore(baseDir)
+	t.Cleanup(func() { s.Close() })
 	if _, err := s.CreateProject("demo"); err != nil {
 		t.Fatal(err)
 	}
 
-	err = runExport(s, []string{"--all", "--project", "demo"})
+	err := runExport(s, []string{"--all", "--project", "demo"})
 	if err == nil {
 		t.Fatal("expected error for --all + --project combo")
 	}
@@ -646,12 +619,9 @@ func TestRunExportAllAndProjectRejected(t *testing.T) {
 }
 
 func TestResolveTaskRef_HintPIDMatches(t *testing.T) {
-	dir, err := os.MkdirTemp("", "segments-ref-1-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(dir)
+	dir := t.TempDir()
 	st := store.NewStore(dir)
+	t.Cleanup(func() { st.Close() })
 
 	proj, _ := st.CreateProject("alpha")
 	task, _ := st.CreateTask(proj.ID, "t1", "body", 2)
@@ -666,12 +636,9 @@ func TestResolveTaskRef_HintPIDMatches(t *testing.T) {
 }
 
 func TestResolveTaskRef_HintPIDOverridden(t *testing.T) {
-	dir, err := os.MkdirTemp("", "segments-ref-2-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(dir)
+	dir := t.TempDir()
 	st := store.NewStore(dir)
+	t.Cleanup(func() { st.Close() })
 
 	p1, _ := st.CreateProject("alpha")
 	p2, _ := st.CreateProject("beta")
@@ -691,12 +658,9 @@ func TestResolveTaskRef_HintPIDOverridden(t *testing.T) {
 }
 
 func TestResolveTaskRef_NoHintScansAllProjects(t *testing.T) {
-	dir, err := os.MkdirTemp("", "segments-ref-3-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(dir)
+	dir := t.TempDir()
 	st := store.NewStore(dir)
+	t.Cleanup(func() { st.Close() })
 
 	_, _ = st.CreateProject("alpha")
 	p2, _ := st.CreateProject("beta")
@@ -715,12 +679,9 @@ func TestResolveTaskRef_NoHintScansAllProjects(t *testing.T) {
 }
 
 func TestResolveTaskRef_PrefixMatch(t *testing.T) {
-	dir, err := os.MkdirTemp("", "segments-ref-4-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(dir)
+	dir := t.TempDir()
 	st := store.NewStore(dir)
+	t.Cleanup(func() { st.Close() })
 
 	proj, _ := st.CreateProject("alpha")
 	task, _ := st.CreateTask(proj.ID, "t", "", 2)
@@ -735,15 +696,12 @@ func TestResolveTaskRef_PrefixMatch(t *testing.T) {
 }
 
 func TestResolveTaskRef_NotFoundWrapsLMDB(t *testing.T) {
-	dir, err := os.MkdirTemp("", "segments-ref-5-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(dir)
+	dir := t.TempDir()
 	st := store.NewStore(dir)
+	t.Cleanup(func() { st.Close() })
 	_, _ = st.CreateProject("alpha")
 
-	_, err = resolveTaskRef(st, "", "missing-task-id")
+	_, err := resolveTaskRef(st, "", "missing-task-id")
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -756,12 +714,9 @@ func TestResolveTaskRef_NotFoundWrapsLMDB(t *testing.T) {
 }
 
 func TestResolveTaskRef_AmbiguousPrefixReturnsStructuredErr(t *testing.T) {
-	dir, err := os.MkdirTemp("", "segments-ref-6-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(dir)
+	dir := t.TempDir()
 	st := store.NewStore(dir)
+	t.Cleanup(func() { st.Close() })
 
 	p1, _ := st.CreateProject("alpha")
 	p2, _ := st.CreateProject("beta")
@@ -785,7 +740,7 @@ func TestResolveTaskRef_AmbiguousPrefixReturnsStructuredErr(t *testing.T) {
 		t.Skip("no shared hex prefix in this random run")
 	}
 
-	_, err = resolveTaskRef(st, "", shared)
+	_, err := resolveTaskRef(st, "", shared)
 	if err == nil {
 		t.Fatal("expected ambiguity error")
 	}
@@ -807,14 +762,11 @@ func TestResolveTaskRef_AmbiguousPrefixReturnsStructuredErr(t *testing.T) {
 }
 
 func TestMCP_GetTaskCrossProject(t *testing.T) {
-	dir, err := os.MkdirTemp("", "segments-mcp-get-xp-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(dir)
+	dir := t.TempDir()
 	t.Setenv("SEGMENTS_DATA_DIR", dir)
 
 	st := store.NewStore(dir)
+	t.Cleanup(func() { st.Close() })
 	p1, _ := st.CreateProject("alpha")
 	p2, _ := st.CreateProject("beta")
 	task, _ := st.CreateTask(p2.ID, "in beta", "a body", 2)
@@ -854,14 +806,11 @@ func TestMCP_GetTaskCrossProject(t *testing.T) {
 }
 
 func TestMCP_UpdateTaskCrossProject(t *testing.T) {
-	dir, err := os.MkdirTemp("", "segments-mcp-upd-xp-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(dir)
+	dir := t.TempDir()
 	t.Setenv("SEGMENTS_DATA_DIR", dir)
 
 	st := store.NewStore(dir)
+	t.Cleanup(func() { st.Close() })
 	p1, _ := st.CreateProject("alpha")
 	p2, _ := st.CreateProject("beta")
 	task, _ := st.CreateTask(p2.ID, "in beta", "", 2)
@@ -893,14 +842,11 @@ func TestMCP_UpdateTaskCrossProject(t *testing.T) {
 }
 
 func TestMCP_DeleteTaskCrossProject(t *testing.T) {
-	dir, err := os.MkdirTemp("", "segments-mcp-del-xp-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(dir)
+	dir := t.TempDir()
 	t.Setenv("SEGMENTS_DATA_DIR", dir)
 
 	st := store.NewStore(dir)
+	t.Cleanup(func() { st.Close() })
 	p1, _ := st.CreateProject("alpha")
 	p2, _ := st.CreateProject("beta")
 	task, _ := st.CreateTask(p2.ID, "to delete", "", 2)
@@ -919,14 +865,11 @@ func TestMCP_DeleteTaskCrossProject(t *testing.T) {
 }
 
 func TestMCP_GetTaskMissingTask_WrappedError(t *testing.T) {
-	dir, err := os.MkdirTemp("", "segments-mcp-miss-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(dir)
+	dir := t.TempDir()
 	t.Setenv("SEGMENTS_DATA_DIR", dir)
 
 	st := store.NewStore(dir)
+	t.Cleanup(func() { st.Close() })
 	st.CreateProject("alpha")
 
 	out := callTool(st, mcpContext{}, "segments_get_task", map[string]interface{}{"task_id": "nonexistent"})
@@ -1004,11 +947,11 @@ func TestParseSince(t *testing.T) {
 }
 
 func TestMCPListTasks_CompactStripsBody(t *testing.T) {
-	dir, _ := os.MkdirTemp("", "segments-list-compact-")
-	defer os.RemoveAll(dir)
+	dir := t.TempDir()
 	t.Setenv("SEGMENTS_DATA_DIR", dir)
 
 	st := store.NewStore(dir)
+	t.Cleanup(func() { st.Close() })
 	p, _ := st.CreateProject("alpha")
 	st.CreateTask(p.ID, "t1", "BODY-CONTENT-MARKER", 2)
 
@@ -1034,11 +977,11 @@ func TestMCPListTasks_CompactStripsBody(t *testing.T) {
 }
 
 func TestMCPListTasks_FieldsFullKeepsBody(t *testing.T) {
-	dir, _ := os.MkdirTemp("", "segments-list-full-")
-	defer os.RemoveAll(dir)
+	dir := t.TempDir()
 	t.Setenv("SEGMENTS_DATA_DIR", dir)
 
 	st := store.NewStore(dir)
+	t.Cleanup(func() { st.Close() })
 	p, _ := st.CreateProject("alpha")
 	st.CreateTask(p.ID, "t1", "BODY-CONTENT-MARKER", 2)
 
@@ -1052,11 +995,11 @@ func TestMCPListTasks_FieldsFullKeepsBody(t *testing.T) {
 }
 
 func TestMCPListTasks_LimitCaps(t *testing.T) {
-	dir, _ := os.MkdirTemp("", "segments-list-limit-")
-	defer os.RemoveAll(dir)
+	dir := t.TempDir()
 	t.Setenv("SEGMENTS_DATA_DIR", dir)
 
 	st := store.NewStore(dir)
+	t.Cleanup(func() { st.Close() })
 	p, _ := st.CreateProject("alpha")
 	for i := 0; i < 5; i++ {
 		st.CreateTask(p.ID, "t", "", 2)
@@ -1076,11 +1019,11 @@ func TestMCPListTasks_LimitCaps(t *testing.T) {
 }
 
 func TestMCPListTasks_SinceFiltersByUpdatedAt(t *testing.T) {
-	dir, _ := os.MkdirTemp("", "segments-list-since-")
-	defer os.RemoveAll(dir)
+	dir := t.TempDir()
 	t.Setenv("SEGMENTS_DATA_DIR", dir)
 
 	st := store.NewStore(dir)
+	t.Cleanup(func() { st.Close() })
 	p, _ := st.CreateProject("alpha")
 	old, _ := st.CreateTask(p.ID, "old", "", 2)
 	time.Sleep(120 * time.Millisecond)
@@ -1103,11 +1046,11 @@ func TestMCPListTasks_SinceFiltersByUpdatedAt(t *testing.T) {
 }
 
 func TestMCPListTasks_OrderByClosedAtDesc(t *testing.T) {
-	dir, _ := os.MkdirTemp("", "segments-list-order-")
-	defer os.RemoveAll(dir)
+	dir := t.TempDir()
 	t.Setenv("SEGMENTS_DATA_DIR", dir)
 
 	st := store.NewStore(dir)
+	t.Cleanup(func() { st.Close() })
 	p, _ := st.CreateProject("alpha")
 	a, _ := st.CreateTask(p.ID, "a", "", 2)
 	b, _ := st.CreateTask(p.ID, "b", "", 2)
@@ -1142,11 +1085,11 @@ func TestMCPListTasks_OrderByClosedAtDesc(t *testing.T) {
 }
 
 func TestMCPListTasks_TruncationWrapsResponse(t *testing.T) {
-	dir, _ := os.MkdirTemp("", "segments-list-trunc-")
-	defer os.RemoveAll(dir)
+	dir := t.TempDir()
 	t.Setenv("SEGMENTS_DATA_DIR", dir)
 
 	st := store.NewStore(dir)
+	t.Cleanup(func() { st.Close() })
 	p, _ := st.CreateProject("alpha")
 	// 20 tasks x ~4KB body each = ~80KB, well over the 50KB cap when fields=full.
 	big := strings.Repeat("x", 4096)
@@ -1202,11 +1145,11 @@ func TestMCPListTasksSchemaAdvertisesNewParams(t *testing.T) {
 }
 
 func TestMCPRecent_OrdersByClosedAtDesc(t *testing.T) {
-	dir, _ := os.MkdirTemp("", "segments-recent-order-")
-	defer os.RemoveAll(dir)
+	dir := t.TempDir()
 	t.Setenv("SEGMENTS_DATA_DIR", dir)
 
 	st := store.NewStore(dir)
+	t.Cleanup(func() { st.Close() })
 	p, _ := st.CreateProject("alpha")
 	a, _ := st.CreateTask(p.ID, "a", "first line of a\nsecond", 2)
 	b, _ := st.CreateTask(p.ID, "b", "first line of b", 2)
@@ -1251,11 +1194,11 @@ func TestMCPRecent_OrdersByClosedAtDesc(t *testing.T) {
 }
 
 func TestMCPRecent_LimitDefaultAndOverride(t *testing.T) {
-	dir, _ := os.MkdirTemp("", "segments-recent-limit-")
-	defer os.RemoveAll(dir)
+	dir := t.TempDir()
 	t.Setenv("SEGMENTS_DATA_DIR", dir)
 
 	st := store.NewStore(dir)
+	t.Cleanup(func() { st.Close() })
 	p, _ := st.CreateProject("alpha")
 	done := models.StatusDone
 	for i := 0; i < 15; i++ {
@@ -1285,11 +1228,11 @@ func TestMCPRecent_LimitDefaultAndOverride(t *testing.T) {
 }
 
 func TestMCPRecent_SinceExcludesOld(t *testing.T) {
-	dir, _ := os.MkdirTemp("", "segments-recent-since-")
-	defer os.RemoveAll(dir)
+	dir := t.TempDir()
 	t.Setenv("SEGMENTS_DATA_DIR", dir)
 
 	st := store.NewStore(dir)
+	t.Cleanup(func() { st.Close() })
 	p, _ := st.CreateProject("alpha")
 	done := models.StatusDone
 	old, _ := st.CreateTask(p.ID, "old", "", 2)
@@ -1315,11 +1258,11 @@ func TestMCPRecent_SinceExcludesOld(t *testing.T) {
 }
 
 func TestMCPRecent_SkipsOpenTasks(t *testing.T) {
-	dir, _ := os.MkdirTemp("", "segments-recent-open-")
-	defer os.RemoveAll(dir)
+	dir := t.TempDir()
 	t.Setenv("SEGMENTS_DATA_DIR", dir)
 
 	st := store.NewStore(dir)
+	t.Cleanup(func() { st.Close() })
 	p, _ := st.CreateProject("alpha")
 	st.CreateTask(p.ID, "still-todo", "", 2)
 	inProg, _ := st.CreateTask(p.ID, "working", "", 2)
@@ -1343,11 +1286,11 @@ func TestMCPRecent_SkipsOpenTasks(t *testing.T) {
 }
 
 func TestMCPRecent_CombinesAcrossProjectsWhenIDOmitted(t *testing.T) {
-	dir, _ := os.MkdirTemp("", "segments-recent-multi-")
-	defer os.RemoveAll(dir)
+	dir := t.TempDir()
 	t.Setenv("SEGMENTS_DATA_DIR", dir)
 
 	st := store.NewStore(dir)
+	t.Cleanup(func() { st.Close() })
 	pa, _ := st.CreateProject("alpha")
 	pb, _ := st.CreateProject("beta")
 	ta, _ := st.CreateTask(pa.ID, "alpha-task", "alpha body", 2)
@@ -1378,11 +1321,11 @@ func TestMCPRecent_CombinesAcrossProjectsWhenIDOmitted(t *testing.T) {
 }
 
 func TestMCPRecent_ScopedToProjectExcludesOthers(t *testing.T) {
-	dir, _ := os.MkdirTemp("", "segments-recent-scope-")
-	defer os.RemoveAll(dir)
+	dir := t.TempDir()
 	t.Setenv("SEGMENTS_DATA_DIR", dir)
 
 	st := store.NewStore(dir)
+	t.Cleanup(func() { st.Close() })
 	pa, _ := st.CreateProject("alpha")
 	pb, _ := st.CreateProject("beta")
 	ta, _ := st.CreateTask(pa.ID, "alpha-task", "", 2)
@@ -1532,11 +1475,11 @@ func TestRunRecent_DispatchAlias(t *testing.T) {
 }
 
 func TestRunList_NoRecentFlagAccepted(t *testing.T) {
-	dir, _ := os.MkdirTemp("", "segments-list-norecent-")
-	defer os.RemoveAll(dir)
+	dir := t.TempDir()
 	t.Setenv("SEGMENTS_DATA_DIR", dir)
 
 	st := store.NewStore(dir)
+	t.Cleanup(func() { st.Close() })
 	p, _ := st.CreateProject("alpha")
 	tk, _ := st.CreateTask(p.ID, "t", "", 2)
 	done := models.StatusDone
@@ -1563,11 +1506,7 @@ func min(a, b int) int {
 // NOT included -- the agent calls segments_list_projects / segments_recent
 // on demand instead.
 func TestBuildContextPayload_SegmentsContextBlock(t *testing.T) {
-	dir, err := os.MkdirTemp("", "segments-ctx-block-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(dir)
+	dir := t.TempDir()
 	t.Setenv("SEGMENTS_DATA_DIR", dir)
 
 	origWD, _ := os.Getwd()
@@ -1581,6 +1520,7 @@ func TestBuildContextPayload_SegmentsContextBlock(t *testing.T) {
 	defer os.Chdir(origWD)
 
 	st := store.NewStore(dir)
+	t.Cleanup(func() { st.Close() })
 	p, _ := st.CreateProject("alpha")
 	beta, _ := st.CreateProject("beta")
 	ip, _ := st.CreateTask(p.ID, "active work", "", 2)
@@ -1620,14 +1560,11 @@ func TestBuildContextPayload_SegmentsContextBlock(t *testing.T) {
 // TestBuildContextPayload_OptOut verifies setting session_start_inject=false
 // suppresses the hook output entirely.
 func TestBuildContextPayload_OptOut(t *testing.T) {
-	dir, err := os.MkdirTemp("", "segments-ctx-optout-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(dir)
+	dir := t.TempDir()
 	t.Setenv("SEGMENTS_DATA_DIR", dir)
 
 	st := store.NewStore(dir)
+	t.Cleanup(func() { st.Close() })
 	p, _ := st.CreateProject("alpha")
 	st.CreateTask(p.ID, "t", "", 2)
 
@@ -1641,11 +1578,7 @@ func TestBuildContextPayload_OptOut(t *testing.T) {
 // TestSegmentsContextBlock_NoCWDMatch verifies the no-match stanza is a terse
 // one-liner pointing at segments_list_projects -- no verbose project dump.
 func TestSegmentsContextBlock_NoCWDMatch(t *testing.T) {
-	dir, err := os.MkdirTemp("", "segments-ctx-nomatch-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(dir)
+	dir := t.TempDir()
 	t.Setenv("SEGMENTS_DATA_DIR", dir)
 
 	origWD, _ := os.Getwd()
@@ -1659,6 +1592,7 @@ func TestSegmentsContextBlock_NoCWDMatch(t *testing.T) {
 	defer os.Chdir(origWD)
 
 	st := store.NewStore(dir)
+	t.Cleanup(func() { st.Close() })
 	st.CreateProject("alpha")
 	st.CreateProject("beta")
 	projects, _ := st.ListProjects()
@@ -1683,11 +1617,7 @@ func TestSegmentsContextBlock_NoCWDMatch(t *testing.T) {
 // TestSegmentsContextBlock_NoCWDMatch_GitHint verifies that when CWD has a
 // .git directory we append a short pointer to `git log`.
 func TestSegmentsContextBlock_NoCWDMatch_GitHint(t *testing.T) {
-	dir, err := os.MkdirTemp("", "segments-ctx-githint-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(dir)
+	dir := t.TempDir()
 	t.Setenv("SEGMENTS_DATA_DIR", dir)
 
 	origWD, _ := os.Getwd()
@@ -1701,6 +1631,7 @@ func TestSegmentsContextBlock_NoCWDMatch_GitHint(t *testing.T) {
 	defer os.Chdir(origWD)
 
 	st := store.NewStore(dir)
+	t.Cleanup(func() { st.Close() })
 	// Two projects prevent resolveProject's single-project fallback from
 	// latching on -- we need genuine no-match to hit the git-hint branch.
 	st.CreateProject("alpha")
@@ -1720,11 +1651,7 @@ func TestSegmentsContextBlock_NoCWDMatch_GitHint(t *testing.T) {
 // unrelated settings, adds mcp__segments once, and is a no-op on re-run.
 // removeClaudeAllowlist should strip the entry without clobbering siblings.
 func TestClaudeAllowlistIdempotent(t *testing.T) {
-	dir, err := os.MkdirTemp("", "segments-allowlist-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(dir)
+	dir := t.TempDir()
 
 	path := filepath.Join(dir, "settings.json")
 	seed := map[string]interface{}{

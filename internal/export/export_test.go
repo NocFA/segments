@@ -13,12 +13,7 @@ import (
 
 func tmpPath(t *testing.T) string {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "segments-export-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
-	return filepath.Join(dir, "nested", "tasks.jsonl")
+	return filepath.Join(t.TempDir(), "nested", "tasks.jsonl")
 }
 
 func readLines(t *testing.T, path string) []Envelope {
