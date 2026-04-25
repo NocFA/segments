@@ -671,6 +671,25 @@ body[data-theme="obsidian"] .graph-svg .g-node.s-closed .g-title { color: var(--
 .seg-pulse { animation: segPulse 1.4s ease-out; }
 .seg-enter { animation: segSlideIn 420ms cubic-bezier(.2,.7,.2,1); }
 
+/* Sticky "unseen" indicator: persists from update until the user
+   hovers/selects the task. Subtle slow pulse on a left-border accent so
+   returning users can scan for fresh activity at a glance. */
+@keyframes segUnseenPulse {
+  0%, 100% { opacity: 0.55; }
+  50%      { opacity: 1; }
+}
+.seg-unseen { position: relative; }
+.seg-unseen::before {
+  content: '';
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 3px;
+  background: var(--seg-accent);
+  animation: segUnseenPulse 2.4s ease-in-out infinite;
+  pointer-events: none;
+}
+.kanban-card.seg-unseen::before { border-top-left-radius: inherit; border-bottom-left-radius: inherit; }
+
 /* a11y: visible focus ring only via keyboard */
 body[data-theme="obsidian"] button:focus-visible,
 body[data-theme="obsidian"] input:focus-visible,
@@ -1754,6 +1773,31 @@ body[data-theme="dossier"] .ready-box .sub {
   font-family: var(--seg-font); font-size: 10px;
   color: var(--seg-muted); margin-top: 4px; letter-spacing: 0.3px;
 }
+/* All-tasks stamp: green sibling stacked under the red Ready Queue stamp,
+   counter-rotated so they read as two layered stickers on the page. */
+body[data-theme="dossier"] .ready-box.all-tasks {
+  border-color: var(--seg-done);
+  transform: rotate(1deg);
+  margin-top: 10px;
+}
+body[data-theme="dossier"] .ready-box.all-tasks .label,
+body[data-theme="dossier"] .ready-box.all-tasks .num {
+  color: var(--seg-done);
+}
+/* Sidebar "mark all seen" affordance: shares the side-item visual on
+   obsidian/console, gets a quieter inline-link treatment on dossier. */
+body[data-theme="dossier"] .unseen-action {
+  display: flex; justify-content: space-between; align-items: baseline;
+  margin-top: 14px; padding: 4px 2px;
+  background: transparent; border: none;
+  font-family: var(--seg-font); font-size: 10px; letter-spacing: 1px;
+  color: var(--seg-muted); cursor: pointer; text-transform: uppercase;
+}
+body[data-theme="dossier"] .unseen-action:hover { color: var(--seg-text); }
+body[data-theme="dossier"] .unseen-action .pill {
+  font-family: var(--seg-font-mono); font-size: 10px;
+  color: var(--seg-accent);
+}
 
 body[data-theme="dossier"] .side-shortcuts {
   margin-top: auto; padding-top: 20px;
@@ -2693,6 +2737,7 @@ const Themes = {
 const Store = {
   projects: [],
   tasks: [],
+  tasksByProject: Object.create(null),  // project_id -> [task,...]; rebuilt incrementally
   activeProjectId: loadPref('project', null),
   scope: loadPref('ui.scope', 'project'),  // 'project' | 'all' (persisted)
   selectedId: null,
@@ -2723,6 +2768,7 @@ const Store = {
   paletteQuery: '',
   paletteCursor: 0,
   _paletteItems: [],             // cached at render; click handler looks up by index
+  seenMap: loadSeenMap(),        // task id -> last-seen updated_at; persisted (see saveSeenMap)
 };
 
 function pushAgentLog(msg) {
@@ -2739,6 +2785,60 @@ function savePref(key, value) {
     if (value == null) localStorage.removeItem('segments.' + key);
     else localStorage.setItem('segments.' + key, value);
   } catch (e) {}
+}
+
+// Unseen-changes indicator: persists a per-task seen marker so tasks that have
+// been touched (created/updated/done) since the user last looked stay flagged
+// until the user hovers/selects them. Survives reloads via localStorage.
+// in_progress tasks are excluded -- they already read as "active".
+function loadSeenMap() {
+  try {
+    const raw = localStorage.getItem('segments.seen');
+    if (!raw) return Object.create(null);
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return Object.create(null);
+    return parsed;
+  } catch (e) { return Object.create(null); }
+}
+
+let _saveSeenTimer = null;
+function saveSeenMap() {
+  if (_saveSeenTimer) return;
+  _saveSeenTimer = setTimeout(() => {
+    _saveSeenTimer = null;
+    try { localStorage.setItem('segments.seen', JSON.stringify(Store.seenMap)); }
+    catch (e) {}
+  }, 400);
+}
+
+// First time we ever load tasks for a fresh seenMap, snapshot every task's
+// updated_at so existing data doesn't all show up as "unseen". Subsequent
+// updates (newer updated_at) re-mark the task as unseen until viewed.
+function seedSeenMapIfFresh() {
+  if (Store.seenMap.__init__) return;
+  for (const t of Store.tasks) Store.seenMap[t.id] = t.updated_at;
+  Store.seenMap.__init__ = Date.now();
+  saveSeenMap();
+}
+
+function isUnseen(t) {
+  if (!t || t.status === 'in_progress') return false;
+  const seen = Store.seenMap[t.id];
+  if (!seen) return true;
+  return seen < t.updated_at;
+}
+
+function markSeen(id, el) {
+  const t = Store.tasks.find(x => x.id === id);
+  if (!t) return;
+  if (Store.seenMap[id] === t.updated_at) return;
+  Store.seenMap[id] = t.updated_at;
+  saveSeenMap();
+  // Surgical DOM update: strip the class from any element showing this id so
+  // the user doesn't have to wait for a re-render to see the indicator clear.
+  const safeId = (window.CSS && CSS.escape) ? CSS.escape(id) : id;
+  document.querySelectorAll('.seg-unseen[data-id="' + safeId + '"]').forEach(n => n.classList.remove('seg-unseen'));
+  if (el && el.classList) el.classList.remove('seg-unseen');
 }
 
 // ===================================================================
@@ -2796,6 +2896,37 @@ const Util = {
     return tasks.filter(t =>
       t.status === 'todo' || t.status === 'in_progress' || t.status === 'blocker'
     );
+  },
+  // Single-pass derivation of render-loop context: byId, counts, ready list,
+  // a ready-id Set for O(1) lookup, and dependents (reverse blocked_by index).
+  // Build once per render, thread down to subrenderers. Saves repeated
+  // O(N) passes in graph views (readyIds) and O(N) filters in detail views
+  // (dependents) and composer/sidebar code.
+  buildCtx(tasks) {
+    const byId = Object.create(null);
+    const dependents = Object.create(null);
+    const counts = { total: tasks.length, todo: 0, in_progress: 0, blocker: 0, done: 0, closed: 0 };
+    let unseenCount = 0;
+    for (const t of tasks) {
+      byId[t.id] = t;
+      if (counts[t.status] !== undefined) counts[t.status]++;
+      if (isUnseen(t)) unseenCount++;
+    }
+    const ready = [];
+    for (const t of tasks) {
+      const ids = Util.blockers(t);
+      for (const bid of ids) {
+        (dependents[bid] || (dependents[bid] = [])).push(t);
+      }
+      if (t.status !== 'todo') continue;
+      const isReady = ids.length === 0 || ids.every(id => {
+        const b = byId[id];
+        return b && (b.status === 'done' || b.status === 'closed');
+      });
+      if (isReady) ready.push(t);
+    }
+    const readyIds = new Set(ready.map(t => t.id));
+    return { byId, counts, ready, readyIds, dependents, unseenCount };
   },
   esc(s) {
     return String(s == null ? '' : s)
@@ -3018,6 +3149,9 @@ function handleWSMessage(msg) {
         const now = Date.now();
         const isNew = !Store.tasks.some(t => t.id === msg.data.id);
         upsertTaskLocal(msg.data);
+        // Treat the currently-selected task as already seen so own-edits and
+        // foreign edits the user is staring at don't immediately re-flag.
+        if (Store.selectedId === msg.data.id) markSeen(msg.data.id);
         if (msg.type === 'task:created' || isNew) Store.entering[msg.data.id] = now;
         else Store.pulse[msg.data.id] = now;
         if (msg.type === 'task:created' || isNew) {
@@ -3051,7 +3185,19 @@ function handleWSMessage(msg) {
     case 'task:deleted':
       if (msg.data && msg.data.id) {
         const before = Store.tasks.length;
+        const removed = Store.tasks.find(t => t.id === msg.data.id);
         Store.tasks = Store.tasks.filter(t => t.id !== msg.data.id);
+        if (removed) {
+          const bucket = Store.tasksByProject[removed.project_id];
+          if (bucket) {
+            const k = bucket.findIndex(x => x.id === msg.data.id);
+            if (k >= 0) bucket.splice(k, 1);
+          }
+        }
+        if (Store.seenMap[msg.data.id]) {
+          delete Store.seenMap[msg.data.id];
+          saveSeenMap();
+        }
         if (Store.selectedId === msg.data.id) Store.selectedId = null;
         if (Store.tasks.length !== before) {
           pushAgentLog('deleted ' + Util.shortId(msg.data.id, 8));
@@ -3089,7 +3235,30 @@ function projectChipHTML(task) {
 
 function upsertTaskLocal(task) {
   const i = Store.tasks.findIndex(t => t.id === task.id);
+  const prev = i >= 0 ? Store.tasks[i] : null;
   if (i >= 0) Store.tasks[i] = task; else Store.tasks.push(task);
+  // Maintain Store.tasksByProject in lockstep so sidebar render doesn't have
+  // to scan Store.tasks per project on every paint. project_id changes are
+  // rare; handle them by removing from the old bucket first.
+  if (prev && prev.project_id !== task.project_id) {
+    const oldBucket = Store.tasksByProject[prev.project_id];
+    if (oldBucket) {
+      const k = oldBucket.findIndex(x => x.id === task.id);
+      if (k >= 0) oldBucket.splice(k, 1);
+    }
+  }
+  let bucket = Store.tasksByProject[task.project_id];
+  if (!bucket) bucket = Store.tasksByProject[task.project_id] = [];
+  const k = bucket.findIndex(x => x.id === task.id);
+  if (k >= 0) bucket[k] = task; else bucket.push(task);
+}
+
+function rebuildTasksByProject() {
+  const idx = Object.create(null);
+  for (const t of Store.tasks) {
+    (idx[t.project_id] || (idx[t.project_id] = [])).push(t);
+  }
+  Store.tasksByProject = idx;
 }
 
 function sortAndRender() {
@@ -3151,14 +3320,18 @@ async function loadTasks() {
     try {
       Store.tasks = await API.listAllTasks();
       Store.tasks.sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+      rebuildTasksByProject();
+      seedSeenMapIfFresh();
       render();
     } catch (e) { console.error('loadTasks', e); }
     return;
   }
-  if (!Store.activeProjectId) { Store.tasks = []; render(); return; }
+  if (!Store.activeProjectId) { Store.tasks = []; rebuildTasksByProject(); render(); return; }
   try {
     Store.tasks = await API.listTasks(Store.activeProjectId);
     Store.tasks.sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+    rebuildTasksByProject();
+    seedSeenMapIfFresh();
     render();
   } catch (e) { console.error('loadTasks', e); }
 }
@@ -3169,7 +3342,20 @@ async function loadTasks() {
 const Actions = {
   selectTask(id) {
     Store.selectedId = id; Store.combo = null;
+    if (id) markSeen(id);
     render(Store.view === 'graph' ? { scrollTo: '.g-node.sel' } : undefined);
+  },
+  markAllSeen() {
+    let changed = false;
+    for (const t of Store.tasks) {
+      if (t.status === 'in_progress') continue;
+      if (Store.seenMap[t.id] !== t.updated_at) {
+        Store.seenMap[t.id] = t.updated_at;
+        changed = true;
+      }
+    }
+    if (changed) saveSeenMap();
+    render();
   },
   clearSelection() { Store.selectedId = null; Store.combo = null; render(); },
   setView(v) {
@@ -3364,12 +3550,12 @@ const Actions = {
   switchProject(id) {
     Store.activeProjectId = id; savePref('project', id);
     Store.scope = 'project'; savePref('ui.scope', 'project');
-    Store.selectedId = null; Store.tasks = [];
+    Store.selectedId = null; Store.tasks = []; rebuildTasksByProject();
     render(); loadTasks();
   },
   setScopeAll() {
     Store.scope = 'all'; savePref('ui.scope', 'all');
-    Store.selectedId = null; Store.tasks = [];
+    Store.selectedId = null; Store.tasks = []; rebuildTasksByProject();
     render(); loadTasks();
   },
   openNewProject() { Store.newProjectOpen = true; render({ focus: '.dialog input' }); },
@@ -3793,21 +3979,22 @@ Themes.register('obsidian', {
 
 function renderObsidian() {
   const T = Themes.get(Store.theme);
+  const ctx = Util.buildCtx(Store.tasks);
   const tasks = filteredTasks();
-  const byId = tasksById();
-  const counts = Util.counts(Store.tasks);
-  const ready = Util.ready(Store.tasks);
+  const byId = ctx.byId;
+  const counts = ctx.counts;
+  const readyCount = ctx.ready.length;
   const selected = Store.selectedId ? byId[Store.selectedId] : null;
 
   return '<div class="app">' +
     obsTopbar(T) +
     '<div class="main">' +
-      obsSidebar(T, counts, ready.length) +
+      obsSidebar(T, counts, readyCount, ctx.unseenCount) +
       '<div class="content">' +
         (Store.composerOpen ? obsComposer(T) : '') +
-        obsMainView(T, tasks, byId) +
+        obsMainView(T, tasks, byId, ctx) +
       '</div>' +
-      (selected ? obsDetail(T, selected, byId) : '') +
+      (selected ? obsDetail(T, selected, byId, ctx) : '') +
     '</div>' +
   (Store.newProjectOpen ? obsNewProjectDialog() : '') +
   paletteOverlay() +
@@ -3850,10 +4037,10 @@ function obsTopbar(T) {
   '</div>';
 }
 
-function obsSidebar(T, counts, readyCount) {
+function obsSidebar(T, counts, readyCount, unseenCount) {
   const allActive = Store.scope === 'all';
   const projectsHtml = Store.projects.map(p => {
-    const tasks = Store.tasks.filter(t => t.project_id === p.id);
+    const tasks = Store.tasksByProject[p.id] || [];
     const c = Util.counts(tasks);
     const bars = ['blocker', 'in_progress', 'todo', 'done']
       .filter(s => c[s]).map(s => {
@@ -3879,6 +4066,11 @@ function obsSidebar(T, counts, readyCount) {
       '<button class="side-item ' + (Store.filter === 'ready' ? 'ready-active' : '') + '" data-act="toggle-ready" aria-pressed="' + (Store.filter === 'ready' ? 'true' : 'false') + '">' +
         '<span>Ready queue</span><span class="pill">' + readyCount + '</span>' +
       '</button>' +
+      (unseenCount > 0
+        ? '<button class="side-item unseen-action" data-act="mark-all-seen" title="Stop the unseen-changes pulse on every flagged task">' +
+            '<span>Mark all seen</span><span class="pill">' + unseenCount + '</span>' +
+          '</button>'
+        : '') +
     '</div>' +
     '<div>' +
       '<div class="side-label" style="display:flex;justify-content:space-between;align-items:center">' +
@@ -3929,10 +4121,10 @@ function composerProjectSelector() {
     '<span class="seg-select-wrap"><select data-act="composer-project">' + opts + '</select></span>';
 }
 
-function obsMainView(T, tasks, byId) {
+function obsMainView(T, tasks, byId, ctx) {
   if (Store.view === 'kanban') return obsKanbanView(T, tasks, byId);
-  if (Store.view === 'graph') return obsGraphView(T, tasks, byId);
-  return obsListView(T, tasks, byId);
+  if (Store.view === 'graph') return obsGraphView(T, tasks, byId, ctx);
+  return obsListView(T, tasks, byId, ctx);
 }
 
 function obsKanbanView(T, tasks, byId) {
@@ -3971,11 +4163,13 @@ function obsKanbanCard(T, t, byId) {
   const dragging = Store.dragging === t.id;
   const pulsing = Store.pulse[t.id] && Date.now() - Store.pulse[t.id] < 2000;
   const entering = !!Store.entering[t.id];
+  const unseen = isUnseen(t);
   const classes = ['kanban-card', 's-' + t.status];
   if (selected) classes.push('selected');
   if (dragging) classes.push('dragging');
   if (pulsing) classes.push('seg-pulse');
   if (entering) classes.push('seg-enter');
+  if (unseen) classes.push('seg-unseen');
 
   const bars = [0, 1, 2, 3].map(i => {
     const filled = (4 - t.priority);
@@ -4005,7 +4199,7 @@ function obsKanbanCard(T, t, byId) {
   '</div>';
 }
 
-function obsGraphView(T, tasks, byId) {
+function obsGraphView(T, tasks, byId, ctx) {
   if (!tasks.length) {
     return '<div class="graph"><div class="empty">' +
       (hasActiveScope()
@@ -4017,7 +4211,7 @@ function obsGraphView(T, tasks, byId) {
     W: 168, H: 62, gapX: 22, gapY: 34, padX: 28, padY: 28, rankGap: 14,
     containerW: Graph.containerWidth(),
   });
-  const ready = new Set(Util.ready(Store.tasks).map(t => t.id));
+  const ready = ctx ? ctx.readyIds : new Set(Util.ready(Store.tasks).map(t => t.id));
   const readyInView = tasks.reduce((n, t) => n + (ready.has(t.id) ? 1 : 0), 0);
   const sel = Store.selectedId;
   const focus = Graph.focusSet(sel, tasks, byId);
@@ -4079,9 +4273,9 @@ function obsGraphView(T, tasks, byId) {
   '</div>';
 }
 
-function obsListView(T, tasks, byId) {
+function obsListView(T, tasks, byId, ctx) {
   const showBanner = Store.filter === 'ready' && Store.view === 'list';
-  const banner = showBanner ? readyBannerHTML(Util.ready(Store.tasks).length) : '';
+  const banner = showBanner ? readyBannerHTML(ctx ? ctx.ready.length : Util.ready(Store.tasks).length) : '';
   if (!tasks.length) {
     return '<div class="list">' + banner + '<div class="empty">' +
       (hasActiveScope() ? 'No tasks' + (Store.search ? ' match “' + Util.esc(Store.search) + '”' : '') + '. Press <kbd>c</kbd> to create.'
@@ -4125,10 +4319,12 @@ function obsListRow(T, t, byId) {
   const selected = Store.selectedId === t.id;
   const pulsing = Store.pulse[t.id] && Date.now() - Store.pulse[t.id] < 2000;
   const entering = !!Store.entering[t.id];
+  const unseen = isUnseen(t);
   const classes = ['row', 's-' + t.status];
   if (selected) classes.push('selected');
   if (pulsing) classes.push('seg-pulse');
   if (entering) classes.push('seg-enter');
+  if (unseen) classes.push('seg-unseen');
 
   const bars = [0, 1, 2, 3].map(i => {
     const filled = (4 - t.priority);
@@ -4167,11 +4363,11 @@ function obsListRow(T, t, byId) {
   '</div>';
 }
 
-function obsDetail(T, task, byId) {
+function obsDetail(T, task, byId, ctx) {
   const proj = Store.projects.find(p => p.id === task.project_id);
   const bids = Util.blockers(task);
   const blocker = bids.length ? byId[bids[0]] : null;
-  const dependents = Object.values(byId).filter(t => Util.blockers(t).includes(task.id));
+  const dependents = (ctx && ctx.dependents[task.id]) || Object.values(byId).filter(t => Util.blockers(t).includes(task.id));
   const statusOpts = Object.keys(T.statusMeta).map(s =>
     '<option value="' + s + '"' + (task.status === s ? ' selected' : '') + '>' + T.statusMeta[s].label + '</option>').join('');
 
@@ -4260,22 +4456,23 @@ Themes.register('console', {
 
 function renderConsole() {
   const T = Themes.get(Store.theme);
+  const ctx = Util.buildCtx(Store.tasks);
   const tasks = filteredTasks();
-  const byId = tasksById();
-  const counts = Util.counts(Store.tasks);
-  const ready = Util.ready(Store.tasks);
+  const byId = ctx.byId;
+  const counts = ctx.counts;
+  const readyCount = ctx.ready.length;
   const selected = Store.selectedId ? byId[Store.selectedId] : null;
 
   return '<div class="app">' +
-    conTopbar(T, counts, ready.length) +
-    conStats(T, counts, ready.length) +
+    conTopbar(T, counts, readyCount) +
+    conStats(T, counts, readyCount) +
     '<div class="main">' +
-      conSidebar(T, ready.length) +
+      conSidebar(T, readyCount, ctx.unseenCount) +
       '<div class="content">' +
         (Store.composerOpen ? conComposer(T) : '') +
-        conMainView(T, tasks, byId) +
+        conMainView(T, tasks, byId, ctx) +
       '</div>' +
-      (selected ? conDetail(T, selected, byId) : '') +
+      (selected ? conDetail(T, selected, byId, ctx) : '') +
     '</div>' +
     (Store.newProjectOpen ? conNewProjectDialog() : '') +
     paletteOverlay() +
@@ -4337,10 +4534,10 @@ function conStats(T, counts, readyCount) {
   '</div>';
 }
 
-function conSidebar(T, readyCount) {
+function conSidebar(T, readyCount, unseenCount) {
   const allActive = Store.scope === 'all';
   const projectsHtml = Store.projects.map(p => {
-    const ptasks = Store.tasks.filter(t => t.project_id === p.id);
+    const ptasks = Store.tasksByProject[p.id] || [];
     const c = Util.counts(ptasks);
     const active = !allActive && Store.activeProjectId === p.id;
     return '<button class="project-item ' + (active ? 'active' : '') + '" data-act="project" data-id="' + Util.esc(p.id) + '">' +
@@ -4372,6 +4569,11 @@ function conSidebar(T, readyCount) {
     '<button class="side-item ' + (Store.filter === 'ready' ? 'ready-active' : '') + '" data-act="toggle-ready" aria-pressed="' + (Store.filter === 'ready' ? 'true' : 'false') + '">' +
       '<span>ready queue</span><span class="pill">' + readyCount + '</span>' +
     '</button>' +
+    (unseenCount > 0
+      ? '<button class="side-item unseen-action" data-act="mark-all-seen" title="Stop the unseen-changes pulse on every flagged task">' +
+          '<span>mark all seen</span><span class="pill">' + unseenCount + '</span>' +
+        '</button>'
+      : '') +
     '<div class="side-label">' +
       '<span>-- PROJECTS --</span>' +
       '<button class="add-btn" data-act="new-project" title="New project" aria-label="New project">+</button>' +
@@ -4410,10 +4612,10 @@ function conComposer(T) {
   '</div>';
 }
 
-function conMainView(T, tasks, byId) {
+function conMainView(T, tasks, byId, ctx) {
   if (Store.view === 'kanban') return conKanbanView(T, tasks, byId);
-  if (Store.view === 'graph') return conGraphView(T, tasks, byId);
-  return conListView(T, tasks, byId);
+  if (Store.view === 'graph') return conGraphView(T, tasks, byId, ctx);
+  return conListView(T, tasks, byId, ctx);
 }
 
 function conKanbanView(T, tasks, byId) {
@@ -4452,11 +4654,13 @@ function conKanbanCard(T, t, byId) {
   const dragging = Store.dragging === t.id;
   const pulsing = Store.pulse[t.id] && Date.now() - Store.pulse[t.id] < 2000;
   const entering = !!Store.entering[t.id];
+  const unseen = isUnseen(t);
   const classes = ['kanban-card', 's-' + t.status];
   if (selected) classes.push('selected');
   if (dragging) classes.push('dragging');
   if (pulsing) classes.push('seg-pulse');
   if (entering) classes.push('seg-enter');
+  if (unseen) classes.push('seg-unseen');
 
   const bangs = ['!!!', '!!', '!', '\u00B7'];
   const bang = bangs[t.priority] || '\u00B7';
@@ -4484,7 +4688,7 @@ function conKanbanCard(T, t, byId) {
   '</div>';
 }
 
-function conGraphView(T, tasks, byId) {
+function conGraphView(T, tasks, byId, ctx) {
   if (!tasks.length) {
     return '<div class="graph"><div class="empty">' +
       (hasActiveScope()
@@ -4496,7 +4700,7 @@ function conGraphView(T, tasks, byId) {
     W: 168, H: 58, gapX: 18, gapY: 30, padX: 20, padY: 20, rankGap: 12,
     containerW: Graph.containerWidth(),
   });
-  const ready = new Set(Util.ready(Store.tasks).map(t => t.id));
+  const ready = ctx ? ctx.readyIds : new Set(Util.ready(Store.tasks).map(t => t.id));
   const readyInView = tasks.reduce((n, t) => n + (ready.has(t.id) ? 1 : 0), 0);
   const sel = Store.selectedId;
   const focus = Graph.focusSet(sel, tasks, byId);
@@ -4554,9 +4758,9 @@ function conGraphView(T, tasks, byId) {
   '</div>';
 }
 
-function conListView(T, tasks, byId) {
+function conListView(T, tasks, byId, ctx) {
   const showBanner = Store.filter === 'ready' && Store.view === 'list';
-  const banner = showBanner ? readyBannerHTML(Util.ready(Store.tasks).length) : '';
+  const banner = showBanner ? readyBannerHTML(ctx ? ctx.ready.length : Util.ready(Store.tasks).length) : '';
   if (!tasks.length) {
     return '<div class="list">' + banner + '<div class="empty">' +
       (hasActiveScope()
@@ -4589,10 +4793,12 @@ function conListRow(T, t, byId) {
   const selected = Store.selectedId === t.id;
   const pulsing = Store.pulse[t.id] && Date.now() - Store.pulse[t.id] < 2000;
   const entering = !!Store.entering[t.id];
+  const unseen = isUnseen(t);
   const classes = ['row', 's-' + t.status];
   if (selected) classes.push('selected');
   if (pulsing) classes.push('seg-pulse');
   if (entering) classes.push('seg-enter');
+  if (unseen) classes.push('seg-unseen');
 
   const bangs = ['!!!', '!!', '!', '·'];
   const bang = bangs[t.priority] || '·';
@@ -4629,11 +4835,11 @@ function conListRow(T, t, byId) {
   '</div>';
 }
 
-function conDetail(T, task, byId) {
+function conDetail(T, task, byId, ctx) {
   const proj = Store.projects.find(p => p.id === task.project_id);
   const bids = Util.blockers(task);
   const blocker = bids.length ? byId[bids[0]] : null;
-  const dependents = Object.values(byId).filter(t => Util.blockers(t).includes(task.id));
+  const dependents = (ctx && ctx.dependents[task.id]) || Object.values(byId).filter(t => Util.blockers(t).includes(task.id));
   const statusOpts = Object.keys(T.statusMeta).map(s =>
     '<option value="' + s + '"' + (task.status === s ? ' selected' : '') + '>' +
     T.statusMeta[s].glyph + ' ' + T.statusMeta[s].label + '</option>').join('');
@@ -4725,21 +4931,22 @@ const DOS_ROMAN = ['I', 'II', 'III', 'IV'];
 
 function renderDossier() {
   const T = Themes.get(Store.theme);
+  const ctx = Util.buildCtx(Store.tasks);
   const tasks = filteredTasks();
-  const byId = tasksById();
-  const counts = Util.counts(Store.tasks);
-  const ready = Util.ready(Store.tasks);
+  const byId = ctx.byId;
+  const counts = ctx.counts;
+  const readyCount = ctx.ready.length;
   const selected = Store.selectedId ? byId[Store.selectedId] : null;
 
   return '<div class="app">' +
-    dosTopbar(T, counts, ready.length) +
+    dosTopbar(T, counts, readyCount) +
     '<div class="main">' +
-      dosSidebar(T, ready.length) +
+      dosSidebar(T, readyCount, ctx.unseenCount) +
       '<div class="content">' +
         (Store.composerOpen ? dosComposer(T) : '') +
-        dosMainView(T, tasks, byId) +
+        dosMainView(T, tasks, byId, ctx) +
       '</div>' +
-      (selected ? dosDetail(T, selected, byId) : '') +
+      (selected ? dosDetail(T, selected, byId, ctx) : '') +
     '</div>' +
     (Store.newProjectOpen ? dosNewProjectDialog() : '') +
     paletteOverlay() +
@@ -4800,10 +5007,10 @@ function dosTopbar(T, counts, readyCount) {
   '</div>';
 }
 
-function dosSidebar(T, readyCount) {
+function dosSidebar(T, readyCount, unseenCount) {
   const allActive = Store.scope === 'all';
   const projectsHtml = Store.projects.map(p => {
-    const ptasks = Store.tasks.filter(t => t.project_id === p.id);
+    const ptasks = Store.tasksByProject[p.id] || [];
     const c = Util.counts(ptasks);
     const active = !allActive && Store.activeProjectId === p.id;
     const ornaments = [];
@@ -4828,16 +5035,21 @@ function dosSidebar(T, readyCount) {
       '<button class="add-btn" data-act="new-project" title="New project" aria-label="New project">+</button>' +
     '</div>' +
     '<div>' + projectsHtml + '</div>' +
-    '<button class="ready-box all-tasks ' + (allActive ? 'active' : '') + '" data-act="scope-all" title="Aggregate every project" aria-pressed="' + (allActive ? 'true' : 'false') + '">' +
-      '<div class="label">ALL TASKS</div>' +
-      '<div class="num">' + (allActive ? allTasksTotal : '\u2014') + '</div>' +
-      '<div class="sub">aggregated across every project</div>' +
-    '</button>' +
     '<button class="ready-box ' + (readyActive ? 'active' : '') + '" data-act="toggle-ready" title="Toggle ready filter" aria-pressed="' + (readyActive ? 'true' : 'false') + '">' +
       '<div class="label">READY QUEUE</div>' +
       '<div class="num">' + readyCount + '</div>' +
       '<div class="sub">entries with no outstanding dependencies</div>' +
     '</button>' +
+    '<button class="ready-box all-tasks ' + (allActive ? 'active' : '') + '" data-act="scope-all" title="Aggregate every project" aria-pressed="' + (allActive ? 'true' : 'false') + '">' +
+      '<div class="label">ALL TASKS</div>' +
+      '<div class="num">' + (allActive ? allTasksTotal : '—') + '</div>' +
+      '<div class="sub">aggregated across every project</div>' +
+    '</button>' +
+    (unseenCount > 0
+      ? '<button class="unseen-action" data-act="mark-all-seen" title="Stop the unseen-changes pulse on every flagged task">' +
+          '<span>Mark all seen</span><span class="pill">' + unseenCount + '</span>' +
+        '</button>'
+      : '') +
     '<div class="side-shortcuts">' +
       '<div class="title">Keys</div>' +
       '<div>j \u00B7 k navigate</div>' +
@@ -4869,10 +5081,10 @@ function dosComposer(T) {
   '</div>';
 }
 
-function dosMainView(T, tasks, byId) {
+function dosMainView(T, tasks, byId, ctx) {
   if (Store.view === 'kanban') return dosKanbanView(T, tasks, byId);
-  if (Store.view === 'graph') return dosGraphView(T, tasks, byId);
-  return dosListView(T, tasks, byId);
+  if (Store.view === 'graph') return dosGraphView(T, tasks, byId, ctx);
+  return dosListView(T, tasks, byId, ctx);
 }
 
 function dosKanbanView(T, tasks, byId) {
@@ -4911,11 +5123,13 @@ function dosKanbanCard(T, t, byId) {
   const dragging = Store.dragging === t.id;
   const pulsing = Store.pulse[t.id] && Date.now() - Store.pulse[t.id] < 2000;
   const entering = !!Store.entering[t.id];
+  const unseen = isUnseen(t);
   const classes = ['kanban-card', 's-' + t.status];
   if (selected) classes.push('selected');
   if (dragging) classes.push('dragging');
   if (pulsing) classes.push('seg-pulse');
   if (entering) classes.push('seg-enter');
+  if (unseen) classes.push('seg-unseen');
 
   const blockerChip = bids.length
     ? bids.map(bid => {
@@ -4940,7 +5154,7 @@ function dosKanbanCard(T, t, byId) {
   '</div>';
 }
 
-function dosGraphView(T, tasks, byId) {
+function dosGraphView(T, tasks, byId, ctx) {
   if (!tasks.length) {
     return '<div class="graph"><div class="empty">' +
       (hasActiveScope()
@@ -4952,7 +5166,7 @@ function dosGraphView(T, tasks, byId) {
     W: 188, H: 74, gapX: 28, gapY: 44, padX: 32, padY: 24, rankGap: 18,
     containerW: Graph.containerWidth(),
   });
-  const ready = new Set(Util.ready(Store.tasks).map(t => t.id));
+  const ready = ctx ? ctx.readyIds : new Set(Util.ready(Store.tasks).map(t => t.id));
   const readyInView = tasks.reduce((n, t) => n + (ready.has(t.id) ? 1 : 0), 0);
   const sel = Store.selectedId;
   const focus = Graph.focusSet(sel, tasks, byId);
@@ -5011,9 +5225,9 @@ function dosGraphView(T, tasks, byId) {
   '</div>';
 }
 
-function dosListView(T, tasks, byId) {
+function dosListView(T, tasks, byId, ctx) {
   const showBanner = Store.filter === 'ready' && Store.view === 'list';
-  const banner = showBanner ? readyBannerHTML(Util.ready(Store.tasks).length) : '';
+  const banner = showBanner ? readyBannerHTML(ctx ? ctx.ready.length : Util.ready(Store.tasks).length) : '';
   if (!tasks.length) {
     return '<div class="list">' + banner + '<div class="empty">' +
       (hasActiveScope()
@@ -5055,10 +5269,12 @@ function dosListRow(T, t, byId, idx) {
   const selected = Store.selectedId === t.id;
   const pulsing = Store.pulse[t.id] && Date.now() - Store.pulse[t.id] < 2000;
   const entering = !!Store.entering[t.id];
+  const unseen = isUnseen(t);
   const classes = ['row', 's-' + t.status];
   if (selected) classes.push('selected');
   if (pulsing) classes.push('seg-pulse');
   if (entering) classes.push('seg-enter');
+  if (unseen) classes.push('seg-unseen');
 
   const priLabel = 'Priority P' + t.priority;
 
@@ -5096,11 +5312,11 @@ function dosListRow(T, t, byId, idx) {
   '</div>';
 }
 
-function dosDetail(T, task, byId) {
+function dosDetail(T, task, byId, ctx) {
   const proj = Store.projects.find(p => p.id === task.project_id);
   const bids = Util.blockers(task);
   const blocker = bids.length ? byId[bids[0]] : null;
-  const dependents = Object.values(byId).filter(t => Util.blockers(t).includes(task.id));
+  const dependents = (ctx && ctx.dependents[task.id]) || Object.values(byId).filter(t => Util.blockers(t).includes(task.id));
   const statusOpts = Object.keys(T.statusMeta).map(s =>
     '<option value="' + s + '"' + (task.status === s ? ' selected' : '') + '>' +
     T.statusMeta[s].label.toUpperCase() + '</option>').join('');
@@ -5360,6 +5576,7 @@ app.addEventListener('click', async (e) => {
     case 'scope-all': Actions.setScopeAll(); return;
     case 'toggle-ready': Actions.toggleReadyFilter(); return;
     case 'toggle-ready-strict': Actions.toggleReadyStrict(); return;
+    case 'mark-all-seen': Actions.markAllSeen(); return;
     case 'new-project': Actions.openNewProject(); return;
     case 'close-new-project': Actions.closeNewProject(); return;
     case 'close-new-project-backdrop':
@@ -5484,6 +5701,17 @@ function findKanbanCol(el) {
   }
   return null;
 }
+
+// Hover anywhere over a row/card/node clears the unseen indicator for that
+// task. Uses mouseover (delegated, bubbles) instead of mouseenter (does not
+// bubble), and short-circuits when the element is not flagged so the common
+// case is one classList check per pointer move.
+app.addEventListener('mouseover', (e) => {
+  const tgt = e.target && e.target.closest && e.target.closest('.row, .kanban-card, .g-node');
+  if (!tgt || !tgt.classList || !tgt.classList.contains('seg-unseen')) return;
+  const id = tgt.dataset && tgt.dataset.id;
+  if (id) markSeen(id, tgt);
+});
 
 app.addEventListener('dragstart', (e) => {
   const { el, act } = actOf(e.target);
