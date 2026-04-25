@@ -3167,7 +3167,10 @@ async function loadTasks() {
 // Actions (event handlers)
 // ===================================================================
 const Actions = {
-  selectTask(id) { Store.selectedId = id; Store.combo = null; render(); },
+  selectTask(id) {
+    Store.selectedId = id; Store.combo = null;
+    render(Store.view === 'graph' ? { scrollTo: '.g-node.sel' } : undefined);
+  },
   clearSelection() { Store.selectedId = null; Store.combo = null; render(); },
   setView(v) {
     Store.view = v;
@@ -5226,6 +5229,20 @@ function render(opts) {
   if (opts && opts.scrollTo) {
     const el = document.querySelector(opts.scrollTo);
     if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest' });
+    // The detail panel overlays the right strip of .content, which scrollIntoView
+    // doesn't know about. If the selected graph node lands under it, nudge the
+    // .graph container right so the node sits left of the panel.
+    if (el && el.classList && el.classList.contains('g-node')) {
+      const graph = document.querySelector('.graph');
+      const panel = document.querySelector('.detail');
+      if (graph && panel) {
+        const nodeRect = el.getBoundingClientRect();
+        const panelRect = panel.getBoundingClientRect();
+        const margin = 16;
+        const overlap = nodeRect.right - (panelRect.left - margin);
+        if (overlap > 0) graph.scrollLeft += overlap;
+      }
+    }
   }
   const refocus = (opts && opts.preserveFocus) || autoPreserve;
   if (refocus) {
