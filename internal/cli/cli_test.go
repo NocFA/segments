@@ -339,6 +339,7 @@ func TestPromptCuesPresent(t *testing.T) {
 		"in_progress",
 		"segments_update_tasks",
 		"segments_delete_tasks",
+		"segments_ready",
 		"Ready queue",
 		"discovered-from",
 		"segment it",
@@ -1363,6 +1364,244 @@ func TestMCPRecent_SchemaAppears(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("segments_recent missing from tool defs")
+	}
+}
+
+func TestCallTool_SegmentsReady_OrderingAndTruncation(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "segments-ready-order-")
+	defer os.RemoveAll(dir)
+	t.Setenv("SEGMENTS_DATA_DIR", dir)
+
+	st := store.NewStore(dir)
+	p, _ := st.CreateProject("alpha")
+
+	// Seed 12 todos across priorities. Order of creation determines CreatedAt
+	// so within each priority bucket the earliest-created wins. A tiny sleep
+	// keeps CreatedAt monotonic on fast clocks.
+	type seed struct {
+		title    string
+		priority int
+	}
+	seeds := []seed{
+		{"p2-oldest", 2},
+		{"p3-oldest", 3},
+		{"p1-oldest", 1},
+		{"p2-mid", 2},
+		{"p1-mid", 1},
+		{"p3-mid", 3},
+		{"p2-newest", 2},
+		{"p1-newest", 1},
+		{"p3-newest", 3},
+		{"p-unset-a", 0},
+		{"p-unset-b", 0},
+		{"p-unset-c", 0},
+	}
+	ids := make(map[string]string, len(seeds))
+	for _, s := range seeds {
+		task, err := st.CreateTask(p.ID, s.title, "", s.priority)
+		if err != nil {
+			t.Fatalf("CreateTask %s: %v", s.title, err)
+		}
+		ids[s.title] = task.ID
+		time.Sleep(2 * time.Millisecond)
+	}
+
+	out := callTool(st, mcpContext{}, "segments_ready", map[string]interface{}{
+		"project_id": p.ID,
+		"limit":      float64(5),
+	})
+
+	var got map[string]interface{}
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("expected object response, got error %v: %s", err, out)
+	}
+	ready, ok := got["ready"].([]interface{})
+	if !ok {
+		t.Fatalf("ready missing or not array: %s", out)
+	}
+	if len(ready) != 5 {
+		t.Fatalf("want 5 rows (limit=5), got %d: %s", len(ready), out)
+	}
+	if tr, _ := got["total_ready"].(float64); int(tr) != len(seeds) {
+		t.Errorf("total_ready=%v, want %d: %s", got["total_ready"], len(seeds), out)
+	}
+	if trunc, _ := got["truncated"].(bool); !trunc {
+		t.Errorf("truncated=%v, want true: %s", got["truncated"], out)
+	}
+	wantOrder := []string{"p1-oldest", "p1-mid", "p1-newest", "p2-oldest", "p2-mid"}
+	for i, title := range wantOrder {
+		row := ready[i].(map[string]interface{})
+		if row["id"] != ids[title] {
+			t.Errorf("row %d: got id=%v (title=%v), want %s (%s); full=%s", i, row["id"], row["title"], ids[title], title, out)
+		}
+	}
+	first := ready[0].(map[string]interface{})
+	for _, banned := range []string{"body", "summary", "created_at", "updated_at"} {
+		if _, has := first[banned]; has {
+			t.Errorf("ready row leaked %s field (token-waste guard): %v", banned, first)
+		}
+	}
+	if first["project_id"] != p.ID {
+		t.Errorf("project_id missing on row: %v", first)
+	}
+	if first["project_name"] != "alpha" {
+		t.Errorf("project_name missing on row: %v", first)
+	}
+	if first["age_human"] == nil || first["age_human"] == "" {
+		t.Errorf("age_human missing on row: %v", first)
+	}
+	if _, has := got["in_progress"]; has {
+		t.Errorf("in_progress should be omitted when include_in_progress=false: %s", out)
+	}
+}
+
+func TestCallTool_SegmentsReady_ExcludesBlockedAndDone(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "segments-ready-exclude-")
+	defer os.RemoveAll(dir)
+	t.Setenv("SEGMENTS_DATA_DIR", dir)
+
+	st := store.NewStore(dir)
+	p, _ := st.CreateProject("alpha")
+
+	unblocked, _ := st.CreateTask(p.ID, "unblocked todo", "", 2)
+	openBlocker, _ := st.CreateTask(p.ID, "open blocker", "", 2)
+	blockedByOpen, _ := st.CreateTask(p.ID, "blocked by open", "", 2)
+	doneBlocker, _ := st.CreateTask(p.ID, "done blocker", "", 2)
+	blockedByDone, _ := st.CreateTask(p.ID, "blocked by done", "", 2)
+	doneTask, _ := st.CreateTask(p.ID, "done task", "", 2)
+	closedTask, _ := st.CreateTask(p.ID, "closed task", "", 2)
+	inProg, _ := st.CreateTask(p.ID, "in-progress task", "", 2)
+
+	openBB := []string{openBlocker.ID}
+	doneBB := []string{doneBlocker.ID}
+	st.UpdateTask(p.ID, blockedByOpen.ID, store.TaskPatch{BlockedBy: &openBB})
+	st.UpdateTask(p.ID, blockedByDone.ID, store.TaskPatch{BlockedBy: &doneBB})
+	done := models.StatusDone
+	closed := models.StatusClosed
+	ip := models.StatusInProgress
+	st.UpdateTask(p.ID, doneBlocker.ID, store.TaskPatch{Status: &done})
+	st.UpdateTask(p.ID, doneTask.ID, store.TaskPatch{Status: &done})
+	st.UpdateTask(p.ID, closedTask.ID, store.TaskPatch{Status: &closed})
+	st.UpdateTask(p.ID, inProg.ID, store.TaskPatch{Status: &ip})
+
+	out := callTool(st, mcpContext{}, "segments_ready", map[string]interface{}{"project_id": p.ID})
+	var got map[string]interface{}
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("unmarshal: %v: %s", err, out)
+	}
+	ready := got["ready"].([]interface{})
+	wantReady := map[string]bool{unblocked.ID: true, blockedByDone.ID: true, openBlocker.ID: true}
+	if len(ready) != len(wantReady) {
+		t.Fatalf("want %d ready rows, got %d: %s", len(wantReady), len(ready), out)
+	}
+	for _, row := range ready {
+		id, _ := row.(map[string]interface{})["id"].(string)
+		if !wantReady[id] {
+			t.Errorf("unexpected id in ready: %v; full=%s", id, out)
+		}
+	}
+	forbid := []string{blockedByOpen.ID, doneTask.ID, closedTask.ID, inProg.ID, doneBlocker.ID}
+	for _, row := range ready {
+		id, _ := row.(map[string]interface{})["id"].(string)
+		for _, f := range forbid {
+			if id == f {
+				t.Errorf("forbidden id %s leaked into ready: %s", f, out)
+			}
+		}
+	}
+
+	out2 := callTool(st, mcpContext{}, "segments_ready", map[string]interface{}{
+		"project_id":          p.ID,
+		"include_in_progress": true,
+	})
+	var got2 map[string]interface{}
+	if err := json.Unmarshal([]byte(out2), &got2); err != nil {
+		t.Fatalf("unmarshal include_in_progress: %v: %s", err, out2)
+	}
+	ipRows, ok := got2["in_progress"].([]interface{})
+	if !ok {
+		t.Fatalf("in_progress missing when include_in_progress=true: %s", out2)
+	}
+	if len(ipRows) != 1 {
+		t.Fatalf("want 1 in_progress row, got %d: %s", len(ipRows), out2)
+	}
+	if ipRows[0].(map[string]interface{})["id"] != inProg.ID {
+		t.Errorf("wrong in_progress id: %v; full=%s", ipRows[0], out2)
+	}
+}
+
+func TestCallTool_SegmentsReady_CombinesAcrossProjects(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "segments-ready-multi-")
+	defer os.RemoveAll(dir)
+	t.Setenv("SEGMENTS_DATA_DIR", dir)
+
+	st := store.NewStore(dir)
+	pa, _ := st.CreateProject("alpha")
+	pb, _ := st.CreateProject("beta")
+	a1, _ := st.CreateTask(pa.ID, "alpha-p1", "", 1)
+	time.Sleep(2 * time.Millisecond)
+	b2, _ := st.CreateTask(pb.ID, "beta-p2", "", 2)
+	time.Sleep(2 * time.Millisecond)
+	a2, _ := st.CreateTask(pa.ID, "alpha-p2", "", 2)
+
+	// Omit project_id -> scan all.
+	out := callTool(st, mcpContext{}, "segments_ready", map[string]interface{}{})
+	var got map[string]interface{}
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("unmarshal: %v: %s", err, out)
+	}
+	ready := got["ready"].([]interface{})
+	if len(ready) != 3 {
+		t.Fatalf("want 3 rows across projects, got %d: %s", len(ready), out)
+	}
+	// Order: priority asc, CreatedAt asc -> alpha-p1, then beta-p2 (older than alpha-p2), then alpha-p2.
+	wantOrder := []string{a1.ID, b2.ID, a2.ID}
+	wantProj := []string{"alpha", "beta", "alpha"}
+	for i := range wantOrder {
+		row := ready[i].(map[string]interface{})
+		if row["id"] != wantOrder[i] {
+			t.Errorf("row %d: got id=%v, want %s; full=%s", i, row["id"], wantOrder[i], out)
+		}
+		if row["project_name"] != wantProj[i] {
+			t.Errorf("row %d: got project_name=%v, want %s", i, row["project_name"], wantProj[i])
+		}
+	}
+
+	// Scope to one project drops the other.
+	out2 := callTool(st, mcpContext{}, "segments_ready", map[string]interface{}{"project_id": pa.ID})
+	var got2 map[string]interface{}
+	if err := json.Unmarshal([]byte(out2), &got2); err != nil {
+		t.Fatalf("unmarshal scoped: %v: %s", err, out2)
+	}
+	scoped := got2["ready"].([]interface{})
+	if len(scoped) != 2 {
+		t.Fatalf("scoped: want 2 rows, got %d: %s", len(scoped), out2)
+	}
+	for _, row := range scoped {
+		if row.(map[string]interface{})["project_id"] != pa.ID {
+			t.Errorf("scoped: leaked other project: %v", row)
+		}
+	}
+}
+
+func TestMCPToolDefs_ReadyPresent(t *testing.T) {
+	defs := mcpToolDefs()
+	var def map[string]interface{}
+	for _, d := range defs {
+		if name, _ := d["name"].(string); name == "segments_ready" {
+			def = d
+			break
+		}
+	}
+	if def == nil {
+		t.Fatal("segments_ready missing from tool defs")
+	}
+	raw, _ := json.Marshal(def)
+	s := string(raw)
+	for _, cue := range []string{"ready", "unblocked", "sorted", "include_in_progress", "limit", "project_id"} {
+		if !strings.Contains(s, cue) {
+			t.Errorf("segments_ready def missing cue %q: %s", cue, s)
+		}
 	}
 }
 

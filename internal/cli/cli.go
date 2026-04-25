@@ -3367,12 +3367,13 @@ blocked_by is a correctness signal, not a hint. Set blocked_by=<task_id> wheneve
   Leave blocked_by empty only for genuinely independent tasks. "Do this after that" for flow reasons is handled by priority + list order, not blocked_by. Never create cycles.
   In segments_create_tasks, "#0".."#N" references earlier entries in the same batch; the server resolves these to real UUIDs. Creating a scaffolded batch without linking the obvious dependency chain is a correctness mistake, not a style choice.
 
-Ready queue = todos whose blocker is empty or done. Pick from there first. The SessionStart hook prints a compact segmentsContext banner listing the CWD-resolved project, in-progress tasks, and recently closed tasks; use that to orient before querying.
+Ready queue = todos whose blocker is empty or done. Pick from there first. The SessionStart hook prints a compact segmentsContext banner listing the CWD-resolved project, in-progress tasks, and recently closed tasks; use that to orient before querying. For "what should I work on?" / "what's next?", call segments_ready -- cheap, sorted, no bodies. Do NOT fetch segments_list_tasks and filter client-side. Use segments_get_task once you have picked an id and need its body.
 
 MCP tools (server name: "segments"). Your client may expose them under these exact names or with an "mcp__segments__" prefix (Claude Code does). Trust your client's own tool list; do not invent names. If your client advertises no segments_* tools at all, the MCP server is not connected -- fall back to the CLI below.
   segments_list_projects()
   segments_list_tasks(project_id?, status?, fields?, limit?, since?, order_by?)
   segments_get_task(task_id, project_id?)
+  segments_ready(project_id?, limit?, include_in_progress?)  "What should I work on?" -- unblocked todos, priority-sorted, cross-project by default.
   segments_recent(project_id?, limit?, since?)  "What did we just finish?" -- compact list of recently closed tasks. Omit project_id to scan all projects.
   segments_create_task(title, body?, priority=1|2|3, blocked_by?, project_id?)
   segments_create_tasks(tasks: [{title, body?, priority=1|2|3, blocked_by?}, ...], project_id?)  Preferred for planning.
@@ -3390,7 +3391,7 @@ CLI fallback (only if MCP tools are unavailable). -p is optional: sg auto-resolv
   sg recent                                 Recently closed tasks
 
 Schema deferral: Claude Code and other clients that use ToolSearch defer MCP tool schemas by default. If your tool list shows "mcp__segments__*" tools as deferred (schemas not loaded), issue this as your FIRST tool call of the session to load them before you need them:
-  ToolSearch select:mcp__segments__segments_create_tasks,mcp__segments__segments_update_tasks,mcp__segments__segments_list_tasks,mcp__segments__segments_list_projects,mcp__segments__segments_update_task,mcp__segments__segments_create_task,mcp__segments__segments_get_task,mcp__segments__segments_delete_task,mcp__segments__segments_delete_tasks,mcp__segments__segments_create_project,mcp__segments__segments_rename_project,mcp__segments__segments_recent
+  ToolSearch select:mcp__segments__segments_create_tasks,mcp__segments__segments_update_tasks,mcp__segments__segments_list_tasks,mcp__segments__segments_list_projects,mcp__segments__segments_update_task,mcp__segments__segments_create_task,mcp__segments__segments_get_task,mcp__segments__segments_delete_task,mcp__segments__segments_delete_tasks,mcp__segments__segments_create_project,mcp__segments__segments_rename_project,mcp__segments__segments_ready,mcp__segments__segments_recent
 For a persistent fix, set ENABLE_TOOL_SEARCH=false in Claude Code's environment -- that disables schema deferral globally. A "mcp__segments" entry in permissions.allow (written by sg setup) pre-authorizes every Segments tool so no permission prompts fire, but it does NOT flip schema loading; only ENABLE_TOOL_SEARCH does.`
 
 func handleMCP(s *store.Store, mc mcpContext, req map[string]interface{}) map[string]interface{} {
@@ -3474,7 +3475,7 @@ func mcpToolDefs() []map[string]interface{} {
 				"project_id": prop("string", "Project ID"),
 				"name":       prop("string", "New name"),
 			})},
-		{"name": "segments_list_tasks", "description": "List tasks for a project. Returns compact rows by default (id, title, status, priority, blocked_by, closed_at, updated_at) so the body field stays out of the response. Pass fields=full when you actually need bodies. Responses over ~50KB are truncated and returned as a wrapper object {tasks, truncated, returned, total, hint} so the agent can narrow with since/limit/status/fields=compact. Use since with a duration (7d, 24h, 30m) or RFC3339 date to pull only recent activity.",
+		{"name": "segments_list_tasks", "description": "List tasks for a project. Returns compact rows by default (id, title, status, priority, blocked_by, closed_at, updated_at) so the body field stays out of the response. Pass fields=full when you actually need bodies. Responses over ~50KB are truncated and returned as a wrapper object {tasks, truncated, returned, total, hint} so the agent can narrow with since/limit/status/fields=compact. Use since with a duration (7d, 24h, 30m) or RFC3339 date to pull only recent activity. For 'what should I pick next?' prefer segments_ready (enforces blocker-clear + ready-queue sort); for 'what did we just finish?' prefer segments_recent.",
 			"inputSchema": schema(nil, map[string]interface{}{
 				"project_id": optProject,
 				"status":     prop("string", "Optional filter: todo | in_progress | done | closed | blocker"),
@@ -3563,6 +3564,12 @@ func mcpToolDefs() []map[string]interface{} {
 				"project_id": optProject,
 				"limit":      prop("number", "Max rows returned. Default 10. Non-positive values fall back to the default."),
 				"since":      prop("string", "Only return tasks closed since this point. Accepts RFC3339 date or duration like 7d, 24h, 30m. Tasks without a closed_at fall back to updated_at."),
+			})},
+		{"name": "segments_ready", "description": "Ready queue: the unblocked todos you should pick from next. Status=todo AND every blocker is done/closed, sorted priority asc then CreatedAt asc so URGENT ahead of NORMAL ahead of BACKLOG, oldest first within each bucket. This is the right tool for 'what should I work on?' / 'what's next?' -- cheap, title-only, no bodies, no raw timestamps. Each row carries age_human (\"3d\", \"2h\") instead of RFC3339 to save tokens; call segments_get_task if you need precise times. Prefer this over segments_list_tasks(status=todo), which returns every todo (including blocked ones) and does not enforce the ready-queue sort. Omit project_id to scan ALL projects (each row tagged with project_id/project_name); pass it to scope to one project. Pass include_in_progress=true to also see what's already claimed (separate in_progress section, useful before starting to avoid double-claiming).",
+			"inputSchema": schema(nil, map[string]interface{}{
+				"project_id":          optProject,
+				"limit":               prop("number", "Max rows returned per section. Default 10. Non-positive values fall back to the default. total_ready in the response reflects the pre-truncation count; truncated=true when more exist."),
+				"include_in_progress": prop("boolean", "When true, include an in_progress array alongside ready, sorted by updated_at desc. Useful for spotting stale claims or seeing what other agents are on before you pick."),
 			})},
 	}
 }
@@ -4146,6 +4153,150 @@ func renderRecentTasks(entries []recentEntry, args map[string]interface{}) strin
 	return string(d)
 }
 
+// readyTask is the row shape returned by segments_ready. Compact on purpose --
+// titles are the contract for "what should I pick up next?"; bodies are
+// out-of-band via segments_get_task. Raw timestamps are intentionally omitted;
+// age_human (e.g. "3d", "2h") is what the agent actually scans on and is ~10x
+// cheaper on the wire than RFC3339. For precise times, call segments_get_task.
+type readyTask struct {
+	ID          string `json:"id"`
+	Title       string `json:"title"`
+	Priority    int    `json:"priority"`
+	AgeHuman    string `json:"age_human,omitempty"`
+	ProjectID   string `json:"project_id,omitempty"`
+	ProjectName string `json:"project_name,omitempty"`
+}
+
+// readyResponse is the envelope for segments_ready. Ready carries the unblocked
+// todos (status=todo, blocker-clear); in_progress is only populated when the
+// caller passes include_in_progress=true. total_ready reflects the count BEFORE
+// truncation so the agent can see how many more exist.
+type readyResponse struct {
+	Ready       []readyTask `json:"ready"`
+	InProgress  []readyTask `json:"in_progress,omitempty"`
+	TotalReady  int         `json:"total_ready"`
+	Truncated   bool        `json:"truncated"`
+}
+
+// collectReadyAndInProgress pulls ready candidates (via selectNextTask, which
+// filters to status=todo AND blocker-clear) plus in_progress rows from one or
+// all projects. Ready is accumulated per-project so blocker-lookup stays
+// project-scoped; both slices are tagged with project id/name for cross-project
+// disambiguation.
+func collectReadyAndInProgress(s *store.Store, mc mcpContext, hint string) (ready, inProg []recentEntry, err error) {
+	projects, err := s.ListProjects()
+	if err != nil {
+		return nil, nil, err
+	}
+	var targets []models.Project
+	if hint != "" {
+		pid, rerr := resolveProjectIDForMCP(s, mc, hint)
+		if rerr != nil {
+			return nil, nil, rerr
+		}
+		for i := range projects {
+			if projects[i].ID == pid {
+				targets = []models.Project{projects[i]}
+				break
+			}
+		}
+		if len(targets) == 0 {
+			return nil, nil, fmt.Errorf("project %s vanished after resolution", pid)
+		}
+	} else {
+		targets = projects
+	}
+	for _, p := range targets {
+		tasks, terr := s.ListTasks(p.ID)
+		if terr != nil {
+			return nil, nil, terr
+		}
+		for _, cand := range selectNextTask(tasks) {
+			ready = append(ready, recentEntry{Task: cand, ProjectID: p.ID, ProjectName: p.Name})
+		}
+		for _, t := range tasks {
+			if t.Status == models.StatusInProgress {
+				inProg = append(inProg, recentEntry{Task: t, ProjectID: p.ID, ProjectName: p.Name})
+			}
+		}
+	}
+	return ready, inProg, nil
+}
+
+// renderReadyTasks builds the segments_ready response. Ready rows are sorted
+// globally (priority asc, CreatedAt asc) so cross-project ranking matches
+// selectNextTask. in_progress is sorted UpdatedAt desc (most-recently-touched
+// first) and only included when include_in_progress=true. Limit defaults to 10
+// (matches segments_recent) and caps each section independently. age_human for
+// ready rows is derived from CreatedAt (how long has this been sitting ready);
+// for in_progress rows it is derived from UpdatedAt (how long since claim/edit,
+// surfaces stale claims).
+func renderReadyTasks(ready, inProg []recentEntry, args map[string]interface{}) string {
+	limit := 10
+	if v, ok := args["limit"]; ok {
+		limit = coerceInt(v, 10)
+	}
+	if limit <= 0 {
+		limit = 10
+	}
+	includeIP := false
+	if v, ok := args["include_in_progress"].(bool); ok {
+		includeIP = v
+	}
+
+	sort.SliceStable(ready, func(i, j int) bool {
+		pi, pj := priorityBucket(ready[i].Task.Priority), priorityBucket(ready[j].Task.Priority)
+		if pi != pj {
+			return pi < pj
+		}
+		return ready[i].Task.CreatedAt.Before(ready[j].Task.CreatedAt)
+	})
+	totalReady := len(ready)
+	truncated := false
+	if limit < len(ready) {
+		ready = ready[:limit]
+		truncated = true
+	}
+
+	sort.Slice(inProg, func(i, j int) bool {
+		return inProg[i].Task.UpdatedAt.After(inProg[j].Task.UpdatedAt)
+	})
+	if limit < len(inProg) {
+		inProg = inProg[:limit]
+	}
+
+	resp := readyResponse{
+		Ready:      make([]readyTask, len(ready)),
+		TotalReady: totalReady,
+		Truncated:  truncated,
+	}
+	for i, e := range ready {
+		resp.Ready[i] = readyTask{
+			ID:          e.Task.ID,
+			Title:       e.Task.Title,
+			Priority:    e.Task.Priority,
+			AgeHuman:    humanAge(time.Since(e.Task.CreatedAt)),
+			ProjectID:   e.ProjectID,
+			ProjectName: e.ProjectName,
+		}
+	}
+	if includeIP {
+		resp.InProgress = make([]readyTask, len(inProg))
+		for i, e := range inProg {
+			resp.InProgress[i] = readyTask{
+				ID:          e.Task.ID,
+				Title:       e.Task.Title,
+				Priority:    e.Task.Priority,
+				AgeHuman:    humanAge(time.Since(e.Task.UpdatedAt)),
+				ProjectID:   e.ProjectID,
+				ProjectName: e.ProjectName,
+			}
+		}
+	}
+	d, _ := json.Marshal(resp)
+	return string(d)
+}
+
 // collectRecentEntries pulls tasks from one or all projects, tagging each with
 // its project name so renderRecentTasks can disambiguate. If hint is empty,
 // iterates every project; otherwise resolves the hint to a single project.
@@ -4472,6 +4623,12 @@ func callTool(s *store.Store, mc mcpContext, tool string, args map[string]interf
 			return errMsg(err)
 		}
 		return renderRecentTasks(entries, args)
+	case "segments_ready":
+		ready, inProg, err := collectReadyAndInProgress(s, mc, str("project_id"))
+		if err != nil {
+			return errMsg(err)
+		}
+		return renderReadyTasks(ready, inProg, args)
 	default:
 		return `{"error": "unknown tool"}`
 	}
