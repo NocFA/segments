@@ -3621,8 +3621,9 @@ const Actions = {
     } catch (e) { console.error('deleteTask', e); }
   },
   navigate(dir) {
-    const filtered = filteredTasks();
+    let filtered = filteredTasks();
     if (!filtered.length) return;
+    if (Store.view === 'graph') filtered = Graph.navOrder(filtered);
     const i = filtered.findIndex(t => t.id === Store.selectedId);
     const next = dir > 0 ? Math.min(filtered.length - 1, (i < 0 ? 0 : i + 1))
                          : Math.max(0, (i < 0 ? 0 : i - 1));
@@ -3958,6 +3959,39 @@ const Graph = {
       });
     }
     return focus;
+  },
+  // Visual reading order used by j/k in graph view. Mirrors layout()'s
+  // per-rank sort so j moves to the next node in the same rank (left to
+  // right, wrapping into sub-rows) before descending to the next rank.
+  navOrder(tasks) {
+    const byId = {};
+    tasks.forEach(t => { byId[t.id] = t; });
+    const inScope = new Set(tasks.map(t => t.id));
+    const rank = {};
+    const visit = (id, seen) => {
+      if (rank[id] !== undefined) return rank[id];
+      if (seen.has(id)) return 0;
+      seen.add(id);
+      const t = byId[id];
+      let best = -1;
+      if (t) {
+        for (const bid of Util.blockers(t)) {
+          if (!inScope.has(bid)) continue;
+          const r = visit(bid, seen);
+          if (r > best) best = r;
+        }
+      }
+      const r = best >= 0 ? 1 + best : 0;
+      rank[id] = r;
+      return r;
+    };
+    tasks.forEach(t => visit(t.id, new Set()));
+    return tasks.slice().sort((a, b) => {
+      const ra = rank[a.id] || 0, rb = rank[b.id] || 0;
+      if (ra !== rb) return ra - rb;
+      if (a.priority !== b.priority) return a.priority - b.priority;
+      return a.id.localeCompare(b.id);
+    });
   },
 };
 
