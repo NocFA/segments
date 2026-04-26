@@ -3106,6 +3106,11 @@ func segmentsContextBlock(s *store.Store, projects []models.Project) string {
 		}
 		b.WriteString(fmt.Sprintf("  %s  %s (%s)\n", e.Task.ID[:8], e.Task.Title, relativeAgo(ts)))
 	}
+	b.WriteString("Behavior:\n")
+	b.WriteString("  Orientation only -- do NOT auto-claim from the ready queue or auto-act on this banner. Wait for the user's request.\n")
+	b.WriteString("  For \"what should I work on?\" / \"what's next?\" call segments_ready (one tool call, no list_tasks + client-side filter). This banner does NOT replace segments_ready when picking work.\n")
+	b.WriteString("  In-progress rows are live claims; items older than ~1d may be parked from a prior session -- leave them unless the user asks.\n")
+	b.WriteString("  If your client defers MCP tool schemas (Claude Code does by default), preload first with ToolSearch select:mcp__segments__segments_ready (full list in this server's instructions).\n")
 	return strings.TrimRight(b.String(), "\n")
 }
 

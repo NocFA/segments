@@ -1794,6 +1794,27 @@ func TestBuildContextPayload_SegmentsContextBlock(t *testing.T) {
 	if strings.Contains(out, "beta") || strings.Contains(out, other.ID[:8]) {
 		t.Errorf("cross-project content leaked into banner:\n%s", out)
 	}
+	// Behavior stanza must spell out the contract the agent can't infer
+	// from raw state (do not auto-claim, segments_ready is the picker, banner
+	// does not replace it). Without these, fresh agents either auto-act on
+	// in-progress rows or fall back to list_tasks + client-side filter.
+	if !strings.Contains(out, "Behavior:") {
+		t.Errorf("missing Behavior stanza:\n%s", out)
+	}
+	if !strings.Contains(out, "do NOT auto-claim") {
+		t.Errorf("Behavior stanza missing auto-claim guard:\n%s", out)
+	}
+	if !strings.Contains(out, "segments_ready") {
+		t.Errorf("Behavior stanza missing segments_ready pointer:\n%s", out)
+	}
+	if !strings.Contains(out, "does NOT replace") {
+		t.Errorf("Behavior stanza missing 'does NOT replace' clarification:\n%s", out)
+	}
+	// Stay well under the 2KB inline preview cap (anything over goes to a
+	// tool-results file the agent can't see).
+	if len(out) >= 1900 {
+		t.Errorf("banner too large for inline preview cap (%d bytes >= 1900):\n%s", len(out), out)
+	}
 }
 
 // TestBuildContextPayload_OptOut verifies setting session_start_inject=false
@@ -1851,6 +1872,11 @@ func TestSegmentsContextBlock_NoCWDMatch(t *testing.T) {
 	if strings.Contains(out, "alpha") || strings.Contains(out, "beta") {
 		t.Errorf("project names should NOT be listed, got:\n%s", out)
 	}
+	// No claimable state in this branch -- the Behavior stanza is intentionally
+	// CWD-matched-only.
+	if strings.Contains(out, "Behavior:") {
+		t.Errorf("Behavior stanza should not appear in no-match branch, got:\n%s", out)
+	}
 }
 
 // TestSegmentsContextBlock_NoCWDMatch_GitHint verifies that when CWD has a
@@ -1883,6 +1909,9 @@ func TestSegmentsContextBlock_NoCWDMatch_GitHint(t *testing.T) {
 	}
 	if !strings.Contains(out, "git log") {
 		t.Errorf("expected `git log` pointer, got:\n%s", out)
+	}
+	if strings.Contains(out, "Behavior:") {
+		t.Errorf("Behavior stanza should not appear in no-match branch, got:\n%s", out)
 	}
 }
 
