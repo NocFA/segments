@@ -3,6 +3,7 @@ package store
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -41,6 +42,162 @@ func NewStore(basePath string) *Store {
 
 func (s *Store) BasePath() string {
 	return s.basePath
+}
+
+const migrationsMarkerFile = ".migrations.done"
+
+// RunMigrations applies any not-yet-run schema migrations and records each in
+// a marker file at <basePath>/.migrations.done. Idempotent; safe to call on
+// every startup. Errors are returned to the caller; the marker is only
+// written on success so a failed migration retries next startup.
+func (s *Store) RunMigrations() error {
+	markerPath := filepath.Join(s.basePath, migrationsMarkerFile)
+	done := readMigrationMarker(markerPath)
+
+	if _, ok := done["priority_zero_to_two_v1"]; !ok {
+		if err := s.migratePriorityZeroToTwo(); err != nil {
+			return fmt.Errorf("migration priority_zero_to_two_v1: %w", err)
+		}
+		done["priority_zero_to_two_v1"] = time.Now().UTC().Format(time.RFC3339)
+		if err := writeMigrationMarker(markerPath, done); err != nil {
+			return fmt.Errorf("write migration marker: %w", err)
+		}
+	}
+	return nil
+}
+
+// migratePriorityZeroToTwo rewrites every task with priority=0 to priority=2
+// across every project. Run-once when the priority scale was redefined to put
+// 0=INCIDENT (was: 0=legacy unset). Existing rows at 0 are legacy unset, so 2
+// (STANDARD, the default-when-unsure tier) is the closest semantic fit.
+// UpdatedAt is preserved so the migration does not bump every old row to "now".
+//
+// Before mutating, every affected row is appended to a JSONL backup file at
+// <basePath>/.migrations.backup-priority_zero_to_two_v1-<UTC ts>.jsonl. Each
+// line is the full pre-migration Task; restore is "find the row by id, write
+// task.Priority back". No backup file is created when there is nothing to
+// migrate.
+func (s *Store) migratePriorityZeroToTwo() error {
+	projects, err := s.ListProjects()
+	if err != nil {
+		return err
+	}
+	var pending []migrationPendingRow
+	for _, p := range projects {
+		env, err := s.openEnv(p.ID)
+		if err != nil {
+			return err
+		}
+		err = env.View(func(txn *lmdb.Txn) error {
+			dbi, err := txn.OpenDBI("tasks", 0)
+			if err != nil {
+				if lmdb.IsNotFound(err) {
+					return nil
+				}
+				return err
+			}
+			cursor, err := txn.OpenCursor(dbi)
+			if err != nil {
+				return err
+			}
+			defer cursor.Close()
+			for {
+				_, v, err := cursor.Get(nil, nil, lmdb.Next)
+				if lmdb.IsNotFound(err) {
+					break
+				}
+				if err != nil {
+					return err
+				}
+				var t models.Task
+				if err := json.Unmarshal(v, &t); err != nil {
+					continue
+				}
+				if t.Priority == 0 {
+					pending = append(pending, migrationPendingRow{projectID: p.ID, envRef: env, task: t})
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+	}
+	if len(pending) == 0 {
+		return nil
+	}
+	backupPath := filepath.Join(s.basePath, fmt.Sprintf(".migrations.backup-priority_zero_to_two_v1-%s.jsonl", time.Now().UTC().Format("20060102T150405Z")))
+	if err := writeMigrationBackup(backupPath, pending); err != nil {
+		return fmt.Errorf("write backup before mutating (no rows changed): %w", err)
+	}
+	for _, row := range pending {
+		t := row.task
+		t.Priority = 2
+		data, err := json.Marshal(t)
+		if err != nil {
+			return err
+		}
+		err = updateWithGrow(row.envRef, func(txn *lmdb.Txn) error {
+			dbi, err := txn.OpenDBI("tasks", 0)
+			if err != nil {
+				return err
+			}
+			return txn.Put(dbi, []byte(t.ID), data, 0)
+		})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type migrationPendingRow struct {
+	projectID string
+	envRef    *lmdb.Env
+	task      models.Task
+}
+
+func writeMigrationBackup(path string, rows []migrationPendingRow) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	enc := json.NewEncoder(f)
+	for _, r := range rows {
+		entry := map[string]interface{}{
+			"project_id": r.projectID,
+			"task":       r.task,
+		}
+		if err := enc.Encode(entry); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func readMigrationMarker(path string) map[string]string {
+	out := map[string]string{}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return out
+	}
+	_ = json.Unmarshal(data, &out)
+	return out
+}
+
+func writeMigrationMarker(path string, done map[string]string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(done, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0644)
 }
 
 func (s *Store) openEnv(projectID string) (*lmdb.Env, error) {

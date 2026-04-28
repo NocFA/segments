@@ -32,15 +32,15 @@ export default function (pi: ExtensionAPI) {
 
   pi.registerTool({
     name: "seg_add",
-    description: "Create a single task. For two or more tasks, prefer seg_add_many -- one call, fewer tokens. Always pass priority (1/2/3) and set blocked_by when a hard dependency exists.",
+    description: "Create a single task. For two or more tasks, prefer seg_add_many -- one call, fewer tokens. Always pass priority (0/1/2/3) and set blocked_by when a hard dependency exists.",
     parameters: Type.Object({
       project_id: Type.String({ description: "Project ID" }),
       title: Type.String({ description: "Task title" }),
       body: Type.Optional(Type.String({ description: "Self-contained description: what to do, file paths, constraints, expected outcome" })),
-      priority: Type.Optional(Type.Number({ description: "Integer 1, 2, or 3 -- pick one every time you create. 1=URGENT (\"drop everything\", broken build, blocking other work). 2=NORMAL (regular session work; default when unsure). 3=BACKLOG (someday/idea/future). 0 is legacy-unset -- do NOT pick 0 when creating." })),
+      priority: Type.Optional(Type.Number({ description: "Integer 0/1/2/3. 0=INCIDENT: drop everything (broken main, security, prod outage; reactive only, never assigned during planning). 1=SHIP-CRITICAL: required for the project's v1 thesis. Test: would the user accept v1 without this? If no -> p1. 2=STANDARD: planned work; default when unsure. 3=EXTRA: nice-to-have. Test: could v1 ship without this? If yes -> p3." })),
       blocked_by: Type.Optional(Type.String({ description: "Task ID of a hard blocker. REQUIRED whenever this task literally cannot start until the blocker lands (bootstrap -> downstream, Install X -> Use X, schema -> feature, discovered-from parent -> child). Leave empty only for genuinely independent tasks." })),
     }),
-    handler: async ({ project_id, title, body = "", priority = 0, blocked_by }: { project_id: string; title: string; body?: string; priority?: number; blocked_by?: string }) => {
+    handler: async ({ project_id, title, body = "", priority = 2, blocked_by }: { project_id: string; title: string; body?: string; priority?: number; blocked_by?: string }) => {
       const t = await request(`/api/projects/${project_id}/tasks`, "POST", { title, body, priority });
       if (blocked_by) {
         return request(`/api/tasks/${t.id}`, "PUT", { project_id, title: "", body: "", status: "", priority: -1, blocked_by });
@@ -57,7 +57,7 @@ export default function (pi: ExtensionAPI) {
       tasks: Type.Array(Type.Object({
         title: Type.String({ description: "Task title" }),
         body: Type.Optional(Type.String({ description: "Self-contained description: what to do, file paths, constraints, expected outcome" })),
-        priority: Type.Optional(Type.Number({ description: "Integer 1, 2, or 3 -- pick one per task. 1=URGENT, 2=NORMAL (default), 3=BACKLOG. Do NOT pick 0 when creating." })),
+        priority: Type.Optional(Type.Number({ description: "Integer 0/1/2/3. 0=INCIDENT (drop everything, reactive only). 1=SHIP-CRITICAL (required for v1 thesis). 2=STANDARD (default when unsure). 3=EXTRA (nice-to-have). See seg_add for the decision tests." })),
         blocked_by: Type.Optional(Type.String({ description: "Task ID or '#<index>' of an earlier entry in this batch. Use '#0' when everything depends on a bootstrap task. REQUIRED whenever this task cannot start until the blocker lands." })),
       })),
     }),
@@ -68,7 +68,7 @@ export default function (pi: ExtensionAPI) {
         const t = await request(`/api/projects/${project_id}/tasks`, "POST", {
           title: spec.title,
           body: spec.body ?? "",
-          priority: spec.priority ?? 0,
+          priority: spec.priority ?? 2,
         });
         let blockedBy = spec.blocked_by || "";
         if (blockedBy.startsWith("#")) {
@@ -101,7 +101,7 @@ export default function (pi: ExtensionAPI) {
       title: Type.Optional(Type.String({ description: "New title" })),
       body: Type.Optional(Type.String({ description: "New body" })),
       status: Type.Optional(Type.String({ description: "todo | in_progress | done | closed | blocker. Set in_progress when you claim/pick a task up; done when the work lands." })),
-      priority: Type.Optional(Type.Number({ description: "Integer. 1=URGENT (drop everything / blocking work). 2=NORMAL (regular session work). 3=BACKLOG (someday/idea/future). 0=unset is legacy-only." })),
+      priority: Type.Optional(Type.Number({ description: "Integer 0/1/2/3. 0=INCIDENT (drop everything, reactive only). 1=SHIP-CRITICAL (required for v1 thesis). 2=STANDARD (default when unsure). 3=EXTRA (nice-to-have)." })),
       blocked_by: Type.Optional(Type.String({ description: "Task ID of a hard blocker (empty to clear). Set whenever this task literally cannot start until the blocker lands." })),
     }),
     handler: async ({ project_id, task_id, title = "", body = "", status = "", priority, blocked_by = "" }: any) => {
@@ -120,7 +120,7 @@ export default function (pi: ExtensionAPI) {
         title: Type.Optional(Type.String({ description: "New title" })),
         body: Type.Optional(Type.String({ description: "New body" })),
         status: Type.Optional(Type.String({ description: "todo | in_progress | done | closed | blocker. Set in_progress to claim; done when work lands." })),
-        priority: Type.Optional(Type.Number({ description: "Integer 1/2/3. 1=URGENT, 2=NORMAL, 3=BACKLOG. 0=unset is legacy-only." })),
+        priority: Type.Optional(Type.Number({ description: "Integer 0/1/2/3. 0=INCIDENT (drop everything, reactive only). 1=SHIP-CRITICAL (required for v1 thesis). 2=STANDARD (default when unsure). 3=EXTRA (nice-to-have)." })),
         blocked_by: Type.Optional(Type.String({ description: "Task ID of a hard blocker (empty to clear)." })),
       })),
     }),

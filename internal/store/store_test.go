@@ -493,3 +493,100 @@ func TestCompactReducesFileAndPreservesTasks(t *testing.T) {
 		}
 	}
 }
+
+// TestRunMigrations_PriorityZeroToTwo asserts the one-shot migration that ran
+// when the priority scale was redefined to make 0=INCIDENT (was: 0=legacy
+// unset). Pre-existing rows at 0 are reinterpreted as STANDARD (2), the
+// closest semantic fit, so they don't silently become INCIDENTs after the
+// docstring rewrite. Non-zero priorities are left alone, and the marker file
+// makes the migration idempotent across restarts.
+func TestRunMigrations_PriorityZeroToTwo(t *testing.T) {
+	s, cleanup := setupTest(t)
+	defer cleanup()
+
+	proj, _ := s.CreateProject("alpha")
+	tLegacy, _ := s.CreateTask(proj.ID, "legacy unset", "", 0)
+	tP1, _ := s.CreateTask(proj.ID, "p1 stays", "", 1)
+	tP3, _ := s.CreateTask(proj.ID, "p3 stays", "", 3)
+
+	if err := s.RunMigrations(); err != nil {
+		t.Fatalf("RunMigrations: %v", err)
+	}
+
+	got, _ := s.GetTask(proj.ID, tLegacy.ID)
+	if got.Priority != 2 {
+		t.Errorf("legacy p=0 migrated to %d, want 2", got.Priority)
+	}
+	if !got.UpdatedAt.Equal(tLegacy.UpdatedAt) {
+		t.Errorf("UpdatedAt was bumped during migration: before=%v after=%v", tLegacy.UpdatedAt, got.UpdatedAt)
+	}
+	got, _ = s.GetTask(proj.ID, tP1.ID)
+	if got.Priority != 1 {
+		t.Errorf("p1 mutated by migration: got %d, want 1", got.Priority)
+	}
+	got, _ = s.GetTask(proj.ID, tP3.ID)
+	if got.Priority != 3 {
+		t.Errorf("p3 mutated by migration: got %d, want 3", got.Priority)
+	}
+
+	// Idempotent: a second pass on the same store must not touch anything,
+	// including a freshly-created p=0 (INCIDENT semantics now).
+	tIncident, _ := s.CreateTask(proj.ID, "new incident", "", 0)
+	if err := s.RunMigrations(); err != nil {
+		t.Fatalf("second RunMigrations: %v", err)
+	}
+	got, _ = s.GetTask(proj.ID, tIncident.ID)
+	if got.Priority != 0 {
+		t.Errorf("post-migration p=0 INCIDENT got rewritten to %d, want 0", got.Priority)
+	}
+}
+
+// TestRunMigrations_PriorityZeroToTwo_WritesBackup asserts that the migration
+// dumps every affected row to a JSONL backup file before mutating, so a bad
+// migration is recoverable. The file lives next to the marker at
+// <basePath>/.migrations.backup-priority_zero_to_two_v1-<UTC ts>.jsonl. No
+// backup file is created when there is nothing to migrate.
+func TestRunMigrations_PriorityZeroToTwo_WritesBackup(t *testing.T) {
+	s, cleanup := setupTest(t)
+	defer cleanup()
+
+	proj, _ := s.CreateProject("alpha")
+	t1, _ := s.CreateTask(proj.ID, "legacy a", "", 0)
+	t2, _ := s.CreateTask(proj.ID, "legacy b", "", 0)
+	s.CreateTask(proj.ID, "p2 stays", "", 2)
+
+	if err := s.RunMigrations(); err != nil {
+		t.Fatalf("RunMigrations: %v", err)
+	}
+
+	matches, err := filepath.Glob(filepath.Join(s.basePath, ".migrations.backup-priority_zero_to_two_v1-*.jsonl"))
+	if err != nil {
+		t.Fatalf("glob: %v", err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("want 1 backup file, got %d: %v", len(matches), matches)
+	}
+	data, err := os.ReadFile(matches[0])
+	if err != nil {
+		t.Fatalf("read backup: %v", err)
+	}
+	body := string(data)
+	for _, id := range []string{t1.ID, t2.ID} {
+		if !contains(body, id) {
+			t.Errorf("backup missing affected task id %s: %s", id, body)
+		}
+	}
+}
+
+func contains(s, sub string) bool {
+	return len(s) >= len(sub) && (len(sub) == 0 || indexOf(s, sub) >= 0)
+}
+
+func indexOf(s, sub string) int {
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			return i
+		}
+	}
+	return -1
+}

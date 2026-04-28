@@ -445,6 +445,9 @@ func Run(args []string, version string) error {
 	}
 
 	s := store.NewStore(expandPath(dataDir))
+	if err := s.RunMigrations(); err != nil {
+		fmt.Fprintf(os.Stderr, "segments: migration failed: %v\n", err)
+	}
 
 	// Gate most commands on setup completion. These pass through:
 	//   setup, version, uninstall, mcp, context (invoked by integrations)
@@ -611,6 +614,9 @@ func runServeDaemon(s *store.Store) error {
 	}
 
 	s = store.NewStore(dir)
+	if err := s.RunMigrations(); err != nil {
+		fmt.Fprintf(os.Stderr, "segments: migration failed: %v\n", err)
+	}
 	hub := server.NewHub()
 	srv := server.NewServer(s, hub, cfg, pidFile)
 	srv.SetMCPHandler(mcpDaemonHandler(s))
@@ -715,10 +721,13 @@ func statusGlyph(status models.TaskStatus, blockedOpen bool) string {
 }
 
 // priorityChip returns the priority badge as a fixed 2-visible-width chip.
-// P0/unset renders as two blank spaces so the priority column stays aligned
-// across rows.
+// P0=INCIDENT renders bold-red so it screams louder than P1=SHIP-CRITICAL.
+// Out-of-range priorities render as two blank spaces so the column stays
+// aligned across rows.
 func priorityChip(p int) string {
 	switch p {
+	case 0:
+		return red.Bold(true).Render("P0")
 	case 1:
 		return red.Render("P1")
 	case 2:
@@ -1150,9 +1159,11 @@ func runList(s *store.Store, args []string) error {
 
 // printRecentFooter appends a "Last 3 closed: ..." block to the list/status
 // output. Looks back 30 days; nothing in window means no footer. projID
-// scopes to one project; empty string scans all projects (with project tag).
+// scopes to one project; empty string defers to collectRecentEntries' scope
+// resolution (CWD basename match, then global). Callers that explicitly went
+// global (e.g. multi-project listing) pass projID="" and accept that match.
 func printRecentFooter(s *store.Store, projID string) {
-	entries, err := collectRecentEntries(s, localMCPContext(), projID)
+	entries, err := collectRecentEntries(s, localMCPContext(), projID, false)
 	if err != nil {
 		return
 	}
@@ -1181,14 +1192,14 @@ func printRecentFooter(s *store.Store, projID string) {
 	fmt.Println()
 }
 
-// priorityBucket orders priorities 1 < 2 < 3 < unset so the "ready" queue
-// surfaces the most important work first regardless of whether priority is
-// set. Values outside 1-3 are treated as unset.
+// priorityBucket orders priorities 0=INCIDENT < 1=SHIP-CRITICAL < 2=STANDARD
+// < 3=EXTRA so the "ready" queue surfaces the most important work first.
+// Values outside 0-3 are treated as unset and bucketed last.
 func priorityBucket(p int) int {
-	if p < 1 || p > 3 {
-		return 4
+	if p >= 0 && p <= 3 {
+		return p
 	}
-	return p
+	return 4
 }
 
 // selectNextTask returns the ready-to-work candidates from a task list,
@@ -1368,11 +1379,14 @@ func runNext(s *store.Store, args []string) error {
 // runRecent prints recently closed/done tasks across one or all projects.
 // Mirrors the segments_recent MCP tool but renders human-readably with a
 // "Xh ago" relative timestamp and optional project tag in cross-project mode.
-// Flags: --limit N (default 10), --since DURATION, --project NAME.
+// Flags: --limit N (default 10), --since DURATION, --project NAME, --all.
+// By default, when CWD basename matches a project name the scope is that
+// project; pass --all to override and walk every project.
 func runRecent(s *store.Store, args []string) error {
 	limit := 10
 	sinceArg := ""
 	projHint := ""
+	allProjects := false
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
@@ -1398,6 +1412,8 @@ func runRecent(s *store.Store, args []string) error {
 			}
 			projHint = args[i+1]
 			i++
+		case a == "--all":
+			allProjects = true
 		default:
 			return fmt.Errorf("unknown argument: %s", a)
 		}
@@ -1415,7 +1431,7 @@ func runRecent(s *store.Store, args []string) error {
 		cutoff = c
 	}
 
-	entries, err := collectRecentEntries(s, localMCPContext(), projHint)
+	entries, err := collectRecentEntries(s, localMCPContext(), projHint, allProjects)
 	if err != nil {
 		return err
 	}
@@ -1428,7 +1444,11 @@ func runRecent(s *store.Store, args []string) error {
 		return nil
 	}
 
-	scoped := projHint != ""
+	uniqProj := map[string]struct{}{}
+	for _, e := range entries {
+		uniqProj[e.ProjectID] = struct{}{}
+	}
+	scoped := len(uniqProj) <= 1
 	for _, e := range entries {
 		ts := time.Time{}
 		if e.Task.ClosedAt != nil {
@@ -3108,7 +3128,9 @@ func segmentsContextBlock(s *store.Store, projects []models.Project) string {
 	}
 	b.WriteString("Behavior:\n")
 	b.WriteString("  Orientation only -- do NOT auto-claim from the ready queue or auto-act on this banner. Wait for the user's request.\n")
+	b.WriteString("  Every Segments tool auto-scopes to the CWD-matched project (the one in this banner). To look across the whole portfolio, pass all_projects=true on segments_ready / segments_recent (or use --all on the CLI). Default behavior is project-scoped, on purpose -- a Segments call from inside a project is about that project unless you explicitly ask otherwise.\n")
 	b.WriteString("  For \"what should I work on?\" / \"what's next?\" call segments_ready (one tool call, no list_tasks + client-side filter). This banner does NOT replace segments_ready when picking work.\n")
+	b.WriteString("  Priority is 0/1/2/3 (0=INCIDENT, 1=SHIP-CRITICAL, 2=STANDARD, 3=EXTRA). When scaffolding new tasks, ship-critical work belongs at 1 -- the create-tool docstring carries the decision test. Agents miscalibrate toward 3 by default; if your batch has zero p1s, double-check nothing in it is required for the project's v1 thesis.\n")
 	b.WriteString("  In-progress rows are live claims; items older than ~1d may be parked from a prior session -- leave them unless the user asks.\n")
 	b.WriteString("  If your client defers MCP tool schemas (Claude Code does by default), preload first with ToolSearch select:mcp__segments__segments_ready (full list in this server's instructions).\n")
 	return strings.TrimRight(b.String(), "\n")
@@ -3356,13 +3378,13 @@ When to use it (proactively, without being asked):
 
 Task body is the contract. Every body must be self-contained: what to do, relevant file paths, constraints, expected outcome. A fresh session with no history must be able to pick it up from the body alone.
 
-Prefer the bulk variants (segments_create_tasks / segments_update_tasks / segments_delete_tasks) whenever you touch two or more tasks -- one round-trip, fewer tokens. The array argument for each MUST be a real JSON array, not a stringified one. project_id is optional on all task tools: auto-resolves from CWD basename, single-project fallback, or $SEGMENTS_PROJECT_ID.
+Prefer the bulk variants (segments_create_tasks / segments_update_tasks / segments_delete_tasks) whenever you touch two or more tasks -- one round-trip, fewer tokens. The array argument for each MUST be a real JSON array, not a stringified one. project_id is optional on all task tools: every Segments tool auto-scopes to the CWD-matched project (CWD basename == project name) before falling through to $SEGMENTS_PROJECT_ID, the single-project fallback, or (for segments_ready / segments_recent only) cross-project mode. Pass project_id explicitly to force a specific project, or all_projects=true on segments_ready / segments_recent to look across the whole portfolio from inside a CWD-matched directory.
 
-Priority is an integer 1, 2, or 3 and is required on CREATE -- never omit it. Use numbers, NOT the words "high"/"medium"/"low". Match the user's signal:
-  1  URGENT. "drop everything and fix X", "this is blocking prod", "broken build", "critical bug". Also: any task actively blocking other ready work.
-  2  NORMAL. "let's do X", "add Y", "refactor Z", "ship the feature" -- regular session work. Default to 2 when the intent is clearly "do this now or next" but not urgent.
-  3  BACKLOG. "sometime we should", "maybe later", "one idea is", "let's discuss". Not this session.
-  0 is "unset" and exists only for legacy tasks. Never pick 0 when creating; default to 2 if genuinely unsure.
+Priority is an integer 0, 1, 2, or 3 and is required on CREATE -- never omit it. Use numbers, NOT the words "high"/"medium"/"low". Each tier has a decision test; if every new task in a batch lands at 3, the bar for 1 is too high -- reread the project's v1 thesis and re-rank.
+  0  INCIDENT. Drop everything: broken main, security regression, prod outage, blocked deploy. Reactive only -- never assigned during planning. "this is on fire".
+  1  SHIP-CRITICAL. Required for the project's stated v1 thesis. Test: would the user accept v1 without this? If no -> p1. "this has to land", "v1 needs this", "blocking the launch".
+  2  STANDARD. Planned work; default when unsure. "let's do X", "add Y", "refactor Z", "ship the feature".
+  3  EXTRA. Nice-to-haves. Test: could v1 still meet its thesis without this? If yes -> p3. "sometime we should", "one idea is", "maybe later".
 
 blocked_by is a correctness signal, not a hint. Set blocked_by=<task_id> whenever task A literally cannot start until task B lands. Omitting it when there is a real hard dependency misleads the next agent about which task is actionable.
   You MUST set blocked_by in these cases:
@@ -3378,10 +3400,10 @@ MCP tools (server name: "segments"). Your client may expose them under these exa
   segments_list_projects()
   segments_list_tasks(project_id?, status?, fields?, limit?, since?, order_by?)
   segments_get_task(task_id, project_id?)
-  segments_ready(project_id?, limit?, include_in_progress?)  "What should I work on?" -- unblocked todos, priority-sorted, cross-project by default.
-  segments_recent(project_id?, limit?, since?)  "What did we just finish?" -- compact list of recently closed tasks. Omit project_id to scan all projects.
-  segments_create_task(title, body?, priority=1|2|3, blocked_by?, project_id?)
-  segments_create_tasks(tasks: [{title, body?, priority=1|2|3, blocked_by?}, ...], project_id?)  Preferred for planning.
+  segments_ready(project_id?, all_projects?, limit?, include_in_progress?)  "What should I work on?" -- unblocked todos, priority-sorted. Auto-scopes to the CWD-matched project; pass all_projects=true to rank across every project.
+  segments_recent(project_id?, all_projects?, limit?, since?)  "What did we just finish?" -- compact list of recently closed tasks. Auto-scopes to the CWD-matched project; pass all_projects=true to scan every project.
+  segments_create_task(title, body?, priority=0|1|2|3, blocked_by?, project_id?)
+  segments_create_tasks(tasks: [{title, body?, priority=0|1|2|3, blocked_by?}, ...], project_id?)  Preferred for planning.
   segments_update_task(task_id, title?, body?, status?, priority?, blocked_by?, project_id?)  status: todo | in_progress | done | closed | blocker. Only provided fields change.
   segments_update_tasks(updates: [{task_id, ...}, ...], project_id?)  PREFERRED for claiming a run of tasks or marking several done at session end.
   segments_delete_task(task_id, project_id?)
@@ -3494,7 +3516,7 @@ func mcpToolDefs() []map[string]interface{} {
 				"project_id": optProject,
 				"title":      prop("string", "Task title"),
 				"body":       prop("string", "Self-contained description: what to do, file paths, constraints, expected outcome. A fresh session must be able to pick it up from this alone."),
-				"priority":   prop("number", "Integer 1, 2, or 3 -- pick one every time you create. 1=URGENT (\"drop everything\", broken build, blocking other work). 2=NORMAL (regular session work; default when the intent is now-or-next). 3=BACKLOG (\"sometime\"/idea/future). 0 is legacy-unset -- do NOT pick 0 when creating."),
+				"priority":   prop("number", "Integer 0/1/2/3 -- required on every create. 0=INCIDENT: drop everything (broken main, security, prod outage; reactive only, never assigned during planning). 1=SHIP-CRITICAL: required for the project's v1 thesis. Test: would the user accept v1 without this? If no -> p1. 2=STANDARD: planned work; default when unsure. 3=EXTRA: nice-to-have. Test: could v1 ship without this and still meet its thesis? If yes -> p3. Calibration: if every new task lands at 3, the bar for 1 is too high; reread the v1 thesis and re-rank."),
 				"blocked_by": blockedByArr("Task IDs that hard-block this one. Pass a JSON array of task IDs (preferred when there are 2+); a single string is accepted and coerced to a one-element array. Task stays BLOCKED until every id in the array is done/closed. REQUIRED whenever this task literally cannot start until the blocker(s) land. Common cases: bootstrap blocks downstream, \"Install X\" blocks \"Use X\", schema migration blocks feature that queries it, task discovered while working on X -> blocked_by=[<X>]. Omit for genuinely independent tasks."),
 			})},
 		{"name": "segments_create_tasks", "description": "Create multiple tasks in one call. PREFERRED for planning/scaffolding -- scaffold a whole queue in one round-trip instead of N separate calls. The 'tasks' argument MUST be a real JSON array of objects (NOT a JSON-encoded string). Set priority (1/2/3) on every entry. In blocked_by, '#0'..'#N' references earlier entries in the same batch (resolved to their new UUIDs). Link obvious dependency chains: for a greenfield scaffold, put the bootstrap/init task at #0 and every downstream task gets blocked_by=\"#0\". Creating a scaffold batch without linking obvious dependencies is a correctness mistake, not a style choice.",
@@ -3509,7 +3531,7 @@ func mcpToolDefs() []map[string]interface{} {
 						"properties": map[string]interface{}{
 							"title":      prop("string", "Task title"),
 							"body":       prop("string", "Self-contained description: what to do, file paths, constraints, expected outcome."),
-							"priority":   prop("number", "Integer 1, 2, or 3 -- pick one per task. 1=URGENT (drop-everything, broken build, blocking other work). 2=NORMAL (regular session work; default when unsure). 3=BACKLOG (someday/idea/future). Do NOT pick 0 when creating."),
+							"priority":   prop("number", "Integer 0/1/2/3 -- required on every create. 0=INCIDENT: drop everything (broken main, security, prod outage; reactive only, never assigned during planning). 1=SHIP-CRITICAL: required for the project's v1 thesis. Test: would the user accept v1 without this? If no -> p1. 2=STANDARD: planned work; default when unsure. 3=EXTRA: nice-to-have. Test: could v1 ship without this and still meet its thesis? If yes -> p3. Calibration: if every new task lands at 3, the bar for 1 is too high; reread the v1 thesis and re-rank."),
 							"blocked_by": blockedByArr("Task IDs (or '#<index>' batch refs) that hard-block this entry. Pass a JSON array (preferred for 2+ blockers); a single string is accepted and coerced to a one-element array. '#0'..'#N' resolve to earlier entries in this batch; mixing UUIDs and '#N' refs in one array is fine. Use '#0' when everything depends on a bootstrap task. REQUIRED whenever this task literally cannot start until the blocker(s) land. Omit ONLY for genuinely independent tasks."),
 						},
 					},
@@ -3522,7 +3544,7 @@ func mcpToolDefs() []map[string]interface{} {
 				"title":      prop("string", "New title"),
 				"body":       prop("string", "New body/description"),
 				"status":     prop("string", "todo | in_progress | done | closed | blocker. Set in_progress when you claim/pick up a task; done when the work lands."),
-				"priority":   prop("number", "Integer. 1=URGENT (drop everything / blocking work). 2=NORMAL (regular session work). 3=BACKLOG (someday/idea/future). 0=unset is legacy-only."),
+				"priority":   prop("number", "Integer 0/1/2/3. 0=INCIDENT: drop everything (broken main, security, prod outage; reactive only, never assigned during planning). 1=SHIP-CRITICAL: required for the project's v1 thesis. Test: would the user accept v1 without this? If no -> p1. 2=STANDARD: planned work; default when unsure. 3=EXTRA: nice-to-have. Test: could v1 ship without this and still meet its thesis? If yes -> p3. Calibration: if every update bumps things to 3, the bar for 1 is too high; reread the v1 thesis and re-rank."),
 				"blocked_by": blockedByArr("Replacement list of blocker task IDs. Pass a JSON array of IDs; a single string (coerced to one element) or an empty string/empty array to clear is accepted. Omit the field entirely to preserve existing blockers."),
 			})},
 		{"name": "segments_update_tasks", "description": "Update multiple tasks in one call. PREFERRED whenever you are changing two or more tasks -- one round-trip instead of N separate calls. The 'updates' argument MUST be a real JSON array of objects (NOT a JSON-encoded string). Use this to CLAIM a sequence of tasks (set status=in_progress on each) up front when the user hands you multiple task IDs to work through -- all downstream agents see the claim atomically instead of racing. Also use it to mark several tasks done at session end. Per-entry fields follow segments_update_task semantics.",
@@ -3539,7 +3561,7 @@ func mcpToolDefs() []map[string]interface{} {
 							"title":      prop("string", "New title"),
 							"body":       prop("string", "New body/description"),
 							"status":     prop("string", "todo | in_progress | done | closed | blocker. Set in_progress to claim; done when work lands."),
-							"priority":   prop("number", "Integer 1/2/3. 1=URGENT, 2=NORMAL, 3=BACKLOG. 0=unset is legacy-only."),
+							"priority":   prop("number", "Integer 0/1/2/3. 0=INCIDENT: drop everything (broken main, security, prod outage; reactive only, never assigned during planning). 1=SHIP-CRITICAL: required for the project's v1 thesis. Test: would the user accept v1 without this? If no -> p1. 2=STANDARD: planned work; default when unsure. 3=EXTRA: nice-to-have. Test: could v1 ship without this and still meet its thesis? If yes -> p3. Calibration: if every update bumps things to 3, the bar for 1 is too high; reread the v1 thesis and re-rank."),
 							"blocked_by": blockedByArr("Replacement list of blocker task IDs. Pass an array of IDs; a single string or an empty string/empty array to clear is also accepted. Omit to preserve."),
 						},
 					},
@@ -3564,15 +3586,17 @@ func mcpToolDefs() []map[string]interface{} {
 				"project_id": optProject,
 				"task_id":    prop("string", "Task ID"),
 			})},
-		{"name": "segments_recent", "description": "Recent work summary: compact list of recently closed/done tasks, ordered by closed_at desc. This is the right tool for 'what did we just finish?', end-of-session recaps, and cross-session handoff context. Omit project_id to scan ALL projects (each row carries project_id/project_name for disambiguation); pass it to scope to one project. Body is never returned -- each row has a short summary (first line of body). Prefer this over segments_list_tasks(status=done) when you just want the headline.",
+		{"name": "segments_recent", "description": "Recent work summary: compact list of recently closed/done tasks, ordered by closed_at desc. This is the right tool for 'what did we just finish?', end-of-session recaps, and cross-session handoff context. Scope follows the same convention as every other Segments tool: when the calling shell's CWD basename matches a project name the call auto-scopes to that project; otherwise it walks every project. Pass project_id to force a specific project, or all_projects=true to override CWD auto-scoping and scan everything. Body is never returned -- each row has a short summary (first line of body). Prefer this over segments_list_tasks(status=done) when you just want the headline.",
 			"inputSchema": schema(nil, map[string]interface{}{
-				"project_id": optProject,
-				"limit":      prop("number", "Max rows returned. Default 10. Non-positive values fall back to the default."),
-				"since":      prop("string", "Only return tasks closed since this point. Accepts RFC3339 date or duration like 7d, 24h, 30m. Tasks without a closed_at fall back to updated_at."),
+				"project_id":   optProject,
+				"all_projects": prop("boolean", "When true, scan every project regardless of CWD. Use this to look across the portfolio when your shell happens to be inside a project directory."),
+				"limit":        prop("number", "Max rows returned. Default 10. Non-positive values fall back to the default."),
+				"since":        prop("string", "Only return tasks closed since this point. Accepts RFC3339 date or duration like 7d, 24h, 30m. Tasks without a closed_at fall back to updated_at."),
 			})},
-		{"name": "segments_ready", "description": "Ready queue: the unblocked todos you should pick from next. Status=todo AND every blocker is done/closed, sorted priority asc then CreatedAt asc so URGENT ahead of NORMAL ahead of BACKLOG, oldest first within each bucket. This is the right tool for 'what should I work on?' / 'what's next?' -- cheap, title-only, no bodies, no raw timestamps. Each row carries age_human (\"3d\", \"2h\") instead of RFC3339 to save tokens; call segments_get_task if you need precise times. Prefer this over segments_list_tasks(status=todo), which returns every todo (including blocked ones) and does not enforce the ready-queue sort. Omit project_id to scan ALL projects (each row tagged with project_id/project_name); pass it to scope to one project. Pass include_in_progress=true to also see what's already claimed (separate in_progress section, useful before starting to avoid double-claiming).",
+		{"name": "segments_ready", "description": "Ready queue: the unblocked todos you should pick from next. Status=todo AND every blocker is done/closed, sorted priority asc then CreatedAt asc so INCIDENT ahead of SHIP-CRITICAL ahead of STANDARD ahead of EXTRA, oldest first within each bucket. This is the right tool for 'what should I work on?' / 'what's next?' -- cheap, title-only, no bodies, no raw timestamps. Each row carries age_human (\"3d\", \"2h\") instead of RFC3339 to save tokens; call segments_get_task if you need precise times. Prefer this over segments_list_tasks(status=todo), which returns every todo (including blocked ones) and does not enforce the ready-queue sort. Scope follows the standard Segments convention: when the calling shell's CWD basename matches a project name the call auto-scopes to that project; otherwise it walks every project. Pass project_id to force a specific project, or all_projects=true to override CWD auto-scoping and rank across the entire portfolio. Pass include_in_progress=true to also see what's already claimed (separate in_progress section, useful before starting to avoid double-claiming).",
 			"inputSchema": schema(nil, map[string]interface{}{
 				"project_id":          optProject,
+				"all_projects":        prop("boolean", "When true, scan every project regardless of CWD. Use this when you genuinely want a portfolio-wide ready queue rather than the CWD-scoped one."),
 				"limit":               prop("number", "Max rows returned per section. Default 10. Non-positive values fall back to the default. total_ready in the response reflects the pre-truncation count; truncated=true when more exist."),
 				"include_in_progress": prop("boolean", "When true, include an in_progress array alongside ready, sorted by updated_at desc. Useful for spotting stale claims or seeing what other agents are on before you pick."),
 			})},
@@ -3620,6 +3644,55 @@ func resolveProjectIDForMCP(s *store.Store, mc mcpContext, hint string) (string,
 		names[i] = fmt.Sprintf("%s (%s)", p.Name, p.ID)
 	}
 	return "", fmt.Errorf("cannot auto-resolve project: %d exist [%s]. Pass project_id explicitly or set $SEGMENTS_PROJECT_ID", len(projects), strings.Join(names, ", "))
+}
+
+// resolveScopeForMCP picks a scope for cross-project-capable tools (segments_ready,
+// segments_recent, sg recent). Returns scopedPID="" when the call should run
+// across all projects, or a non-empty scopedPID to limit to one. Resolution
+// order mirrors resolveProjectIDForMCP except that exhausting it yields "all
+// projects" rather than an ambiguity error -- these tools are designed to fan
+// out when no scope is inferable.
+//
+//  1. hint != ""        -> resolve to that project (error if no match)
+//  2. allProjects=true  -> "" (caller explicitly requested global scope)
+//  3. mc.ProjectIDEnv   -> scope to it if it resolves
+//  4. only one project  -> scope to it
+//  5. CWD basename match -> scope to it
+//  6. otherwise         -> "" (global)
+func resolveScopeForMCP(s *store.Store, mc mcpContext, hint string, allProjects bool) (string, error) {
+	projects, err := s.ListProjects()
+	if err != nil {
+		return "", err
+	}
+	if len(projects) == 0 {
+		return "", fmt.Errorf("no projects exist. Run `sg init` or call segments_create_project first")
+	}
+	if hint != "" {
+		if p := resolveProject(projects, hint); p != nil {
+			return p.ID, nil
+		}
+		return "", fmt.Errorf("no project matches %q", hint)
+	}
+	if allProjects {
+		return "", nil
+	}
+	if mc.ProjectIDEnv != "" {
+		if p := resolveProject(projects, mc.ProjectIDEnv); p != nil {
+			return p.ID, nil
+		}
+	}
+	if len(projects) == 1 {
+		return projects[0].ID, nil
+	}
+	if mc.CWD != "" {
+		dirName := filepath.Base(mc.CWD)
+		for i := range projects {
+			if strings.EqualFold(projects[i].Name, dirName) {
+				return projects[i].ID, nil
+			}
+		}
+	}
+	return "", nil
 }
 
 // taskRef is the result of resolving a task reference (full ID or UUID prefix)
@@ -4187,26 +4260,28 @@ type readyResponse struct {
 // filters to status=todo AND blocker-clear) plus in_progress rows from one or
 // all projects. Ready is accumulated per-project so blocker-lookup stays
 // project-scoped; both slices are tagged with project id/name for cross-project
-// disambiguation.
-func collectReadyAndInProgress(s *store.Store, mc mcpContext, hint string) (ready, inProg []recentEntry, err error) {
+// disambiguation. Scope follows the same convention as collectRecentEntries:
+// CWD basename match scopes to that project unless allProjects=true (or no
+// project matches), in which case it walks every project.
+func collectReadyAndInProgress(s *store.Store, mc mcpContext, hint string, allProjects bool) (ready, inProg []recentEntry, err error) {
 	projects, err := s.ListProjects()
 	if err != nil {
 		return nil, nil, err
 	}
+	scopedPID, err := resolveScopeForMCP(s, mc, hint, allProjects)
+	if err != nil {
+		return nil, nil, err
+	}
 	var targets []models.Project
-	if hint != "" {
-		pid, rerr := resolveProjectIDForMCP(s, mc, hint)
-		if rerr != nil {
-			return nil, nil, rerr
-		}
+	if scopedPID != "" {
 		for i := range projects {
-			if projects[i].ID == pid {
+			if projects[i].ID == scopedPID {
 				targets = []models.Project{projects[i]}
 				break
 			}
 		}
 		if len(targets) == 0 {
-			return nil, nil, fmt.Errorf("project %s vanished after resolution", pid)
+			return nil, nil, fmt.Errorf("project %s vanished after resolution", scopedPID)
 		}
 	} else {
 		targets = projects
@@ -4303,29 +4378,31 @@ func renderReadyTasks(ready, inProg []recentEntry, args map[string]interface{}) 
 }
 
 // collectRecentEntries pulls tasks from one or all projects, tagging each with
-// its project name so renderRecentTasks can disambiguate. If hint is empty,
-// iterates every project; otherwise resolves the hint to a single project.
-func collectRecentEntries(s *store.Store, mc mcpContext, hint string) ([]recentEntry, error) {
+// its project name so renderRecentTasks can disambiguate. Scope is resolved
+// via resolveScopeForMCP: explicit hint or allProjects=true override CWD
+// auto-scoping; otherwise CWD basename match scopes to that project; only
+// when no scope is inferable does it walk every project.
+func collectRecentEntries(s *store.Store, mc mcpContext, hint string, allProjects bool) ([]recentEntry, error) {
 	projects, err := s.ListProjects()
 	if err != nil {
 		return nil, err
 	}
-	if hint != "" {
-		pid, err := resolveProjectIDForMCP(s, mc, hint)
-		if err != nil {
-			return nil, err
-		}
+	scopedPID, err := resolveScopeForMCP(s, mc, hint, allProjects)
+	if err != nil {
+		return nil, err
+	}
+	if scopedPID != "" {
 		var chosen *models.Project
 		for i := range projects {
-			if projects[i].ID == pid {
+			if projects[i].ID == scopedPID {
 				chosen = &projects[i]
 				break
 			}
 		}
 		if chosen == nil {
-			return nil, fmt.Errorf("project %s vanished after resolution", pid)
+			return nil, fmt.Errorf("project %s vanished after resolution", scopedPID)
 		}
-		tasks, err := s.ListTasks(pid)
+		tasks, err := s.ListTasks(scopedPID)
 		if err != nil {
 			return nil, err
 		}
@@ -4346,6 +4423,43 @@ func collectRecentEntries(s *store.Store, mc mcpContext, hint string) ([]recentE
 		}
 	}
 	return out, nil
+}
+
+// zeroP1BatchHint returns a calibration nudge for segments_create_tasks when
+// the batch lands zero priority=1 (SHIP-CRITICAL) entries. Skips the hint for
+// brand-new projects (fewer than 3 open todo/in_progress tasks before this
+// batch) where there is no signal to calibrate against, and skips when the
+// batch itself is a single task. Returns "" when no hint applies.
+func zeroP1BatchHint(s *store.Store, projectID string, created []*models.Task) string {
+	if len(created) < 2 {
+		return ""
+	}
+	for _, t := range created {
+		if t.Priority == 1 {
+			return ""
+		}
+	}
+	tasks, err := s.ListTasks(projectID)
+	if err != nil {
+		return ""
+	}
+	createdIDs := make(map[string]struct{}, len(created))
+	for _, t := range created {
+		createdIDs[t.ID] = struct{}{}
+	}
+	prior := 0
+	for _, t := range tasks {
+		if _, isNew := createdIDs[t.ID]; isNew {
+			continue
+		}
+		if t.Status == models.StatusTodo || t.Status == models.StatusInProgress {
+			prior++
+		}
+	}
+	if prior < 3 {
+		return ""
+	}
+	return "This batch landed zero p1 (SHIP-CRITICAL) tasks. Verify nothing in it is required for the project's stated v1 thesis -- agents commonly underweight p1 when scaffolding. If everything genuinely belongs at p2/p3, ignore."
 }
 
 func callTool(s *store.Store, mc mcpContext, tool string, args map[string]interface{}) string {
@@ -4463,6 +4577,13 @@ func callTool(s *store.Store, mc mcpContext, tool string, args map[string]interf
 			created = append(created, t)
 		}
 		notify("tasks:created", created)
+		if hint := zeroP1BatchHint(s, pid, created); hint != "" {
+			d, _ := json.Marshal(map[string]interface{}{
+				"tasks": created,
+				"hint":  hint,
+			})
+			return string(d)
+		}
 		return marshal(created)
 	case "segments_update_task":
 		ref, err := resolveTaskRef(s, str("project_id"), str("task_id"))
@@ -4623,13 +4744,15 @@ func callTool(s *store.Store, mc mcpContext, tool string, args map[string]interf
 		}
 		return marshalTaskWithResolve(ref)
 	case "segments_recent":
-		entries, err := collectRecentEntries(s, mc, str("project_id"))
+		allProjects, _ := args["all_projects"].(bool)
+		entries, err := collectRecentEntries(s, mc, str("project_id"), allProjects)
 		if err != nil {
 			return errMsg(err)
 		}
 		return renderRecentTasks(entries, args)
 	case "segments_ready":
-		ready, inProg, err := collectReadyAndInProgress(s, mc, str("project_id"))
+		allProjects, _ := args["all_projects"].(bool)
+		ready, inProg, err := collectReadyAndInProgress(s, mc, str("project_id"), allProjects)
 		if err != nil {
 			return errMsg(err)
 		}

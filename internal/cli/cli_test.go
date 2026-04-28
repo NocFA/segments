@@ -121,11 +121,11 @@ func TestSelectNextTask_OrderingByPriorityThenAge(t *testing.T) {
 		{ID: "a", Title: "P3 old", Status: models.StatusTodo, Priority: 3, CreatedAt: now.Add(-2 * time.Hour)},
 		{ID: "b", Title: "P1 newer", Status: models.StatusTodo, Priority: 1, CreatedAt: now.Add(-1 * time.Hour)},
 		{ID: "c", Title: "P2 oldest", Status: models.StatusTodo, Priority: 2, CreatedAt: now.Add(-3 * time.Hour)},
-		{ID: "d", Title: "P0 oldest-overall", Status: models.StatusTodo, Priority: 0, CreatedAt: now.Add(-4 * time.Hour)},
+		{ID: "d", Title: "P0 INCIDENT", Status: models.StatusTodo, Priority: 0, CreatedAt: now.Add(-4 * time.Hour)},
 		{ID: "e", Title: "P1 oldest", Status: models.StatusTodo, Priority: 1, CreatedAt: now.Add(-5 * time.Hour)},
 	}
 	got := selectNextTask(tasks)
-	want := []string{"e", "b", "c", "a", "d"}
+	want := []string{"d", "e", "b", "c", "a"}
 	if len(got) != len(want) {
 		t.Fatalf("length: got %d want %d", len(got), len(want))
 	}
@@ -328,10 +328,12 @@ func TestEventVerb_Mapping(t *testing.T) {
 // disappears, the prompt has likely drifted back toward generic text.
 func TestPromptCuesPresent(t *testing.T) {
 	for _, cue := range []string{
-		"URGENT",
-		"NORMAL",
-		"BACKLOG",
-		"drop everything",
+		"INCIDENT",
+		"SHIP-CRITICAL",
+		"STANDARD",
+		"EXTRA",
+		"v1 thesis",
+		"Drop everything",
 		"blocked_by",
 		"correctness",
 		"#0",
@@ -371,7 +373,7 @@ func TestMCPToolDefsPriorityAndBlockedByCues(t *testing.T) {
 		}
 		raw, _ := json.Marshal(d)
 		s := string(raw)
-		for _, cue := range []string{"URGENT", "NORMAL", "BACKLOG"} {
+		for _, cue := range []string{"INCIDENT", "SHIP-CRITICAL", "STANDARD", "EXTRA", "v1 thesis"} {
 			if !strings.Contains(s, cue) {
 				t.Errorf("%s: priority description missing cue %q", name, cue)
 			}
@@ -1392,9 +1394,9 @@ func TestCallTool_SegmentsReady_OrderingAndTruncation(t *testing.T) {
 		{"p2-newest", 2},
 		{"p1-newest", 1},
 		{"p3-newest", 3},
-		{"p-unset-a", 0},
-		{"p-unset-b", 0},
-		{"p-unset-c", 0},
+		{"p0-incident-a", 0},
+		{"p0-incident-b", 0},
+		{"p0-incident-c", 0},
 	}
 	ids := make(map[string]string, len(seeds))
 	for _, s := range seeds {
@@ -1428,7 +1430,7 @@ func TestCallTool_SegmentsReady_OrderingAndTruncation(t *testing.T) {
 	if trunc, _ := got["truncated"].(bool); !trunc {
 		t.Errorf("truncated=%v, want true: %s", got["truncated"], out)
 	}
-	wantOrder := []string{"p1-oldest", "p1-mid", "p1-newest", "p2-oldest", "p2-mid"}
+	wantOrder := []string{"p0-incident-a", "p0-incident-b", "p0-incident-c", "p1-oldest", "p1-mid"}
 	for i, title := range wantOrder {
 		row := ready[i].(map[string]interface{})
 		if row["id"] != ids[title] {
@@ -1598,10 +1600,125 @@ func TestMCPToolDefs_ReadyPresent(t *testing.T) {
 	}
 	raw, _ := json.Marshal(def)
 	s := string(raw)
-	for _, cue := range []string{"ready", "unblocked", "sorted", "include_in_progress", "limit", "project_id"} {
+	for _, cue := range []string{"ready", "unblocked", "sorted", "include_in_progress", "limit", "project_id", "all_projects"} {
 		if !strings.Contains(s, cue) {
 			t.Errorf("segments_ready def missing cue %q: %s", cue, s)
 		}
+	}
+}
+
+// TestCallTool_SegmentsReady_CWDScopesByDefault asserts the convention that
+// when the calling shell's CWD basename matches a project name, segments_ready
+// auto-scopes to that project even if no project_id hint was passed. Without
+// this, an agent inside ~/dev/alpha would see beta tasks too -- the bug that
+// motivated this scoping pass across all Segments tools.
+func TestCallTool_SegmentsReady_CWDScopesByDefault(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "segments-ready-cwd-")
+	defer os.RemoveAll(dir)
+	t.Setenv("SEGMENTS_DATA_DIR", dir)
+
+	st := store.NewStore(dir)
+	pa, _ := st.CreateProject("alpha")
+	pb, _ := st.CreateProject("beta")
+	st.CreateTask(pa.ID, "alpha-task", "", 2)
+	st.CreateTask(pb.ID, "beta-task", "", 2)
+
+	// CWD ends in "alpha" -> auto-scope to alpha; beta should not appear.
+	mc := mcpContext{CWD: filepath.Join(t.TempDir(), "alpha")}
+	out := callTool(st, mc, "segments_ready", map[string]interface{}{})
+	var got map[string]interface{}
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("unmarshal: %v: %s", err, out)
+	}
+	ready := got["ready"].([]interface{})
+	if len(ready) != 1 {
+		t.Fatalf("CWD-scoped: want 1 row, got %d: %s", len(ready), out)
+	}
+	if ready[0].(map[string]interface{})["project_id"] != pa.ID {
+		t.Errorf("CWD-scoped: wrong project: %v", ready[0])
+	}
+}
+
+// TestCallTool_SegmentsReady_AllProjectsOverridesCWD confirms the explicit
+// portfolio-wide opt-in: from a CWD that matches a project, all_projects=true
+// must walk every project, not the auto-scoped one.
+func TestCallTool_SegmentsReady_AllProjectsOverridesCWD(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "segments-ready-allproj-")
+	defer os.RemoveAll(dir)
+	t.Setenv("SEGMENTS_DATA_DIR", dir)
+
+	st := store.NewStore(dir)
+	pa, _ := st.CreateProject("alpha")
+	pb, _ := st.CreateProject("beta")
+	st.CreateTask(pa.ID, "alpha-task", "", 2)
+	st.CreateTask(pb.ID, "beta-task", "", 2)
+
+	mc := mcpContext{CWD: filepath.Join(t.TempDir(), "alpha")}
+	out := callTool(st, mc, "segments_ready", map[string]interface{}{"all_projects": true})
+	var got map[string]interface{}
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("unmarshal: %v: %s", err, out)
+	}
+	ready := got["ready"].([]interface{})
+	if len(ready) != 2 {
+		t.Fatalf("all_projects: want 2 rows across projects, got %d: %s", len(ready), out)
+	}
+}
+
+// TestCallTool_SegmentsRecent_CWDScopesByDefault mirrors the ready test for
+// the recent tool: CWD basename match must scope by default.
+func TestCallTool_SegmentsRecent_CWDScopesByDefault(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("SEGMENTS_DATA_DIR", dir)
+
+	st := store.NewStore(dir)
+	t.Cleanup(func() { st.Close() })
+	pa, _ := st.CreateProject("alpha")
+	pb, _ := st.CreateProject("beta")
+	ta, _ := st.CreateTask(pa.ID, "alpha-task", "", 2)
+	tb, _ := st.CreateTask(pb.ID, "beta-task", "", 2)
+	done := models.StatusDone
+	st.UpdateTask(pa.ID, ta.ID, store.TaskPatch{Status: &done})
+	st.UpdateTask(pb.ID, tb.ID, store.TaskPatch{Status: &done})
+
+	mc := mcpContext{CWD: filepath.Join(t.TempDir(), "alpha")}
+	out := callTool(st, mc, "segments_recent", map[string]interface{}{})
+	var got []map[string]interface{}
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("parse: %v, raw: %s", err, out)
+	}
+	if len(got) != 1 {
+		t.Fatalf("CWD-scoped: want 1 row scoped to alpha, got %d: %s", len(got), out)
+	}
+	if got[0]["id"] != ta.ID {
+		t.Errorf("wrong task: %v", got[0]["id"])
+	}
+}
+
+// TestCallTool_SegmentsRecent_AllProjectsOverridesCWD is the recent
+// counterpart to the ready opt-in test.
+func TestCallTool_SegmentsRecent_AllProjectsOverridesCWD(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("SEGMENTS_DATA_DIR", dir)
+
+	st := store.NewStore(dir)
+	t.Cleanup(func() { st.Close() })
+	pa, _ := st.CreateProject("alpha")
+	pb, _ := st.CreateProject("beta")
+	ta, _ := st.CreateTask(pa.ID, "alpha-task", "", 2)
+	tb, _ := st.CreateTask(pb.ID, "beta-task", "", 2)
+	done := models.StatusDone
+	st.UpdateTask(pa.ID, ta.ID, store.TaskPatch{Status: &done})
+	st.UpdateTask(pb.ID, tb.ID, store.TaskPatch{Status: &done})
+
+	mc := mcpContext{CWD: filepath.Join(t.TempDir(), "alpha")}
+	out := callTool(st, mc, "segments_recent", map[string]interface{}{"all_projects": true})
+	var got []map[string]interface{}
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("parse: %v, raw: %s", err, out)
+	}
+	if len(got) != 2 {
+		t.Fatalf("all_projects: want 2 rows across projects, got %d: %s", len(got), out)
 	}
 }
 
@@ -1991,6 +2108,117 @@ func TestClaudeAllowlistIdempotent(t *testing.T) {
 	fallow, _ := fperms["allow"].([]interface{})
 	if len(fallow) != 2 {
 		t.Errorf("remove dropped unrelated entries: %v", fallow)
+	}
+}
+
+// TestCallTool_SegmentsCreateTasks_ZeroP1HintEmittedOnEstablishedProject
+// asserts the calibration nudge: when a batch lands zero p1 (SHIP-CRITICAL)
+// entries in a project that already has a few open tasks, the response
+// switches from a bare array to {"tasks": [...], "hint": "..."} so the agent
+// (or user) can double-check the priority distribution. The hint must NOT
+// reject the batch -- the tasks are still created.
+func TestCallTool_SegmentsCreateTasks_ZeroP1HintEmittedOnEstablishedProject(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("SEGMENTS_DATA_DIR", dir)
+	st := store.NewStore(dir)
+	t.Cleanup(func() { st.Close() })
+	p, _ := st.CreateProject("alpha")
+	for i := 0; i < 3; i++ {
+		st.CreateTask(p.ID, "prior", "", 2)
+	}
+
+	out := callTool(st, mcpContext{}, "segments_create_tasks", map[string]interface{}{
+		"project_id": p.ID,
+		"tasks": []interface{}{
+			map[string]interface{}{"title": "a", "priority": float64(2)},
+			map[string]interface{}{"title": "b", "priority": float64(3)},
+		},
+	})
+
+	var got map[string]interface{}
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("expected wrapper object response, got error %v: %s", err, out)
+	}
+	hint, _ := got["hint"].(string)
+	if hint == "" {
+		t.Fatalf("hint missing on zero-p1 batch in established project: %s", out)
+	}
+	if !strings.Contains(hint, "p1") && !strings.Contains(hint, "SHIP-CRITICAL") {
+		t.Errorf("hint should mention p1 / SHIP-CRITICAL: %q", hint)
+	}
+	tasks, _ := got["tasks"].([]interface{})
+	if len(tasks) != 2 {
+		t.Errorf("hint must NOT reject the batch; want 2 tasks, got %d: %s", len(tasks), out)
+	}
+}
+
+// TestCallTool_SegmentsCreateTasks_NoHintOnSingletonOrFreshProject covers the
+// two suppression cases: a one-task batch has no distribution to flag, and a
+// brand-new project (<3 prior open tasks) has no signal to calibrate against.
+// In both cases the response must remain a bare array, not the hint wrapper,
+// so existing consumers don't see a shape change for cases the hint isn't
+// designed for.
+func TestCallTool_SegmentsCreateTasks_NoHintOnSingletonOrFreshProject(t *testing.T) {
+	t.Run("singleton-batch", func(t *testing.T) {
+		dir := t.TempDir()
+		t.Setenv("SEGMENTS_DATA_DIR", dir)
+		st := store.NewStore(dir)
+		t.Cleanup(func() { st.Close() })
+		p, _ := st.CreateProject("alpha")
+		for i := 0; i < 5; i++ {
+			st.CreateTask(p.ID, "prior", "", 2)
+		}
+		out := callTool(st, mcpContext{}, "segments_create_tasks", map[string]interface{}{
+			"project_id": p.ID,
+			"tasks": []interface{}{
+				map[string]interface{}{"title": "lonely", "priority": float64(2)},
+			},
+		})
+		if strings.Contains(out, "\"hint\"") {
+			t.Errorf("singleton batch must not emit hint: %s", out)
+		}
+	})
+	t.Run("fresh-project", func(t *testing.T) {
+		dir := t.TempDir()
+		t.Setenv("SEGMENTS_DATA_DIR", dir)
+		st := store.NewStore(dir)
+		t.Cleanup(func() { st.Close() })
+		p, _ := st.CreateProject("alpha")
+		out := callTool(st, mcpContext{}, "segments_create_tasks", map[string]interface{}{
+			"project_id": p.ID,
+			"tasks": []interface{}{
+				map[string]interface{}{"title": "a", "priority": float64(2)},
+				map[string]interface{}{"title": "b", "priority": float64(3)},
+			},
+		})
+		if strings.Contains(out, "\"hint\"") {
+			t.Errorf("fresh project (<3 prior open) must not emit hint: %s", out)
+		}
+	})
+}
+
+// TestCallTool_SegmentsCreateTasks_NoHintWhenP1Present confirms the hint only
+// fires on batches that lack any p1 entry. Mixing a p1 with p2/p3 entries is
+// the calibrated case the prompt is steering toward, so it must stay quiet.
+func TestCallTool_SegmentsCreateTasks_NoHintWhenP1Present(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("SEGMENTS_DATA_DIR", dir)
+	st := store.NewStore(dir)
+	t.Cleanup(func() { st.Close() })
+	p, _ := st.CreateProject("alpha")
+	for i := 0; i < 5; i++ {
+		st.CreateTask(p.ID, "prior", "", 2)
+	}
+	out := callTool(st, mcpContext{}, "segments_create_tasks", map[string]interface{}{
+		"project_id": p.ID,
+		"tasks": []interface{}{
+			map[string]interface{}{"title": "a", "priority": float64(1)},
+			map[string]interface{}{"title": "b", "priority": float64(2)},
+			map[string]interface{}{"title": "c", "priority": float64(3)},
+		},
+	})
+	if strings.Contains(out, "\"hint\"") {
+		t.Errorf("batch containing p1 must not emit hint: %s", out)
 	}
 }
 
