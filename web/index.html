@@ -65,6 +65,91 @@ kbd {
   background: var(--seg-accent-dim);
 }
 
+.list-toolbar {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 16px;
+  font-size: 11px;
+  color: var(--seg-muted);
+  background: var(--seg-bg);
+  border-bottom: 1px solid var(--seg-line);
+}
+.list-toolbar .label {
+  font-size: 10.5px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--seg-faint);
+}
+.list-toolbar select {
+  font-size: 11px;
+  color: var(--seg-muted);
+  font-family: var(--seg-font-mono);
+  border: 1px solid var(--seg-line);
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: var(--seg-surface);
+  cursor: pointer;
+}
+.list-toolbar select:hover { color: var(--seg-text); border-color: var(--seg-line2); }
+.list-toolbar .indicator {
+  font-size: 10.5px;
+  color: var(--seg-faint);
+  font-family: var(--seg-font-mono);
+}
+.list-toolbar .indicator.active { color: var(--seg-accent); }
+
+.list-filter-toolbar { flex-wrap: wrap; row-gap: 6px; }
+.list-filter-toolbar .filter-group {
+  display: inline-flex; align-items: center; gap: 4px;
+}
+.list-filter-toolbar .filter-divider {
+  color: var(--seg-faint);
+  font-size: 11px;
+  padding: 0 2px;
+}
+.list-filter-toolbar .filter-chip {
+  font-size: 11px;
+  font-family: var(--seg-font-mono);
+  color: var(--seg-muted);
+  background: var(--seg-surface);
+  border: 1px solid var(--seg-line);
+  padding: 2px 8px;
+  border-radius: 10px;
+  cursor: pointer;
+  line-height: 1.3;
+}
+.list-filter-toolbar .filter-chip:hover {
+  color: var(--seg-text);
+  border-color: var(--seg-line2);
+}
+.list-filter-toolbar .filter-chip.active {
+  color: var(--seg-accent);
+  background: var(--seg-accent-dim);
+  border-color: var(--seg-accent);
+}
+.list-filter-toolbar .filter-clear {
+  font-size: 11px;
+  font-family: var(--seg-font-mono);
+  color: var(--seg-muted);
+  background: transparent;
+  border: 1px solid var(--seg-line);
+  padding: 2px 8px;
+  border-radius: 3px;
+  cursor: pointer;
+  margin-left: auto;
+}
+.list-filter-toolbar .filter-clear:hover {
+  color: var(--seg-text);
+  border-color: var(--seg-accent);
+  background: var(--seg-accent-dim);
+}
+/* Graph filter toolbar: same chip styling as list, but pinned to the left so
+   it stays visible while the user pans a wide DAG horizontally. */
+.graph-filter-toolbar {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+}
+
 /* ===== Obsidian theme (Direction A) ===== */
 body[data-theme="obsidian"] {
   --seg-bg: #0e1012;
@@ -2745,6 +2830,10 @@ const Store = {
   search: '',
   filter: loadPref('ui.filter', null),     // null | 'ready' (persisted)
   readyStrict: loadPref('ui.ready-strict', null) === 'true', // true = strict, false = widened (persisted)
+  listSort: loadListSortPref(),            // { key, dir } -- list view sort state, persisted
+  statusFilter: loadStatusFilterPref(),    // Set<string> -- empty set = no status filter, persisted
+  priorityFilter: loadPriorityFilterPref(),// Set<number> -- empty set = no priority filter (0=unset), persisted
+  graphBlockerOnly: loadPref('ui.graph-blocker-only', null) === 'true', // graph-only: hide isolated nodes, persisted
   composerOpen: false,
   composerTitle: '',             // staged new-task title (survives re-render)
   composerBody: '',
@@ -2780,6 +2869,79 @@ function loadPref(key, fallback) {
   try { return localStorage.getItem('segments.' + key) || fallback; }
   catch (e) { return fallback; }
 }
+
+// Defined as plain values rather than module-scope const so loadListSortPref()
+// can run during Store initialization without hitting a TDZ error if the
+// constants moved -- the function is the only consumer.
+function loadListSortPref() {
+  const fallback = { key: 'default', dir: 'asc' };
+  const validKeys = { default: 1, priority: 1, id: 1, updated: 1 };
+  try {
+    const raw = localStorage.getItem('segments.ui.list-sort');
+    if (!raw) return Object.assign({}, fallback);
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return Object.assign({}, fallback);
+    const key = validKeys[parsed.key] ? parsed.key : 'default';
+    const dir = parsed.dir === 'desc' ? 'desc' : 'asc';
+    return { key, dir };
+  } catch (e) { return Object.assign({}, fallback); }
+}
+function saveListSortPref(s) {
+  try { localStorage.setItem('segments.ui.list-sort', JSON.stringify(s)); }
+  catch (e) {}
+}
+const LIST_SORT_DEFAULT = { key: 'default', dir: 'asc' };
+const LIST_SORT_KEYS = new Set(['default', 'priority', 'id', 'updated']);
+
+// List-view filter chips. Status set is empty = "all statuses pass"; same for
+// priority. Persisted as JSON arrays under segments.ui.status-filter /
+// segments.ui.priority-filter; absent / empty array = no filter (key removed).
+// loadStatusFilterPref / loadPriorityFilterPref run during Store initialization,
+// before the module-scope STATUS_FILTER_VALUES / PRIORITY_FILTER_VALUES const
+// declarations execute, so they inline their valid-set check (same TDZ dodge
+// as loadListSortPref above).
+function loadStatusFilterPref() {
+  const valid = { todo: 1, in_progress: 1, blocker: 1, done: 1, closed: 1 };
+  try {
+    const raw = localStorage.getItem('segments.ui.status-filter');
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return new Set();
+    return new Set(parsed.filter(v => valid[v]));
+  } catch (e) { return new Set(); }
+}
+function saveStatusFilterPref(s) {
+  try {
+    if (!s || !s.size) localStorage.removeItem('segments.ui.status-filter');
+    else localStorage.setItem('segments.ui.status-filter', JSON.stringify([...s]));
+  } catch (e) {}
+}
+function loadPriorityFilterPref() {
+  try {
+    const raw = localStorage.getItem('segments.ui.priority-filter');
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return new Set();
+    return new Set(parsed.map(Number).filter(v => v === 0 || v === 1 || v === 2 || v === 3));
+  } catch (e) { return new Set(); }
+}
+function savePriorityFilterPref(s) {
+  try {
+    if (!s || !s.size) localStorage.removeItem('segments.ui.priority-filter');
+    else localStorage.setItem('segments.ui.priority-filter', JSON.stringify([...s]));
+  } catch (e) {}
+}
+const STATUS_FILTER_VALUES = ['todo', 'in_progress', 'blocker', 'done', 'closed'];
+const PRIORITY_FILTER_VALUES = [1, 2, 3, 0]; // display order; 0 = unset
+function listFiltersActive() {
+  return (Store.statusFilter && Store.statusFilter.size > 0) ||
+         (Store.priorityFilter && Store.priorityFilter.size > 0);
+}
+function graphFiltersActive() {
+  return (Store.priorityFilter && Store.priorityFilter.size > 0) ||
+         !!Store.graphBlockerOnly;
+}
+
 function savePref(key, value) {
   try {
     if (value == null) localStorage.removeItem('segments.' + key);
@@ -3382,6 +3544,57 @@ const Actions = {
     Store.selectedId = null;
     render();
   },
+  setListSort(value) {
+    const parts = String(value || '').split(':');
+    const key = LIST_SORT_KEYS.has(parts[0]) ? parts[0] : 'default';
+    const dir = parts[1] === 'desc' ? 'desc' : 'asc';
+    Store.listSort = { key, dir };
+    saveListSortPref(Store.listSort);
+    render();
+  },
+  toggleStatusFilter(value) {
+    if (STATUS_FILTER_VALUES.indexOf(value) < 0) return;
+    const s = new Set(Store.statusFilter);
+    if (s.has(value)) s.delete(value); else s.add(value);
+    Store.statusFilter = s;
+    saveStatusFilterPref(s);
+    Store.selectedId = null;
+    render();
+  },
+  togglePriorityFilter(value) {
+    const v = Number(value);
+    if (PRIORITY_FILTER_VALUES.indexOf(v) < 0) return;
+    const s = new Set(Store.priorityFilter);
+    if (s.has(v)) s.delete(v); else s.add(v);
+    Store.priorityFilter = s;
+    savePriorityFilterPref(s);
+    Store.selectedId = null;
+    render();
+  },
+  clearListFilters() {
+    if (!listFiltersActive()) return;
+    Store.statusFilter = new Set();
+    Store.priorityFilter = new Set();
+    saveStatusFilterPref(Store.statusFilter);
+    savePriorityFilterPref(Store.priorityFilter);
+    Store.selectedId = null;
+    render();
+  },
+  toggleGraphBlockerOnly() {
+    Store.graphBlockerOnly = !Store.graphBlockerOnly;
+    savePref('ui.graph-blocker-only', Store.graphBlockerOnly ? 'true' : null);
+    Store.selectedId = null;
+    render();
+  },
+  clearGraphFilters() {
+    if (!graphFiltersActive()) return;
+    Store.priorityFilter = new Set();
+    Store.graphBlockerOnly = false;
+    savePriorityFilterPref(Store.priorityFilter);
+    savePref('ui.graph-blocker-only', null);
+    Store.selectedId = null;
+    render();
+  },
   openBlockerCombo(scope) {
     const already = Store.combo && Store.combo.scope === scope;
     if (already) { Store.combo = null; render(); return; }
@@ -3641,6 +3854,29 @@ function filteredTasks() {
     else if (Store.view === 'list' && !Store.readyStrict) out = Util.readyTree(out);
     else out = Util.ready(out);
   }
+  // Status / priority chip filters: empty Set = no filter for that axis;
+  // otherwise the task's status/priority must be in the set. Filters compose
+  // (AND) with each other, the ready filter above, and the text search below.
+  if (Store.statusFilter && Store.statusFilter.size) {
+    out = out.filter(t => Store.statusFilter.has(t.status));
+  }
+  if (Store.priorityFilter && Store.priorityFilter.size) {
+    out = out.filter(t => Store.priorityFilter.has(t.priority || 0));
+  }
+  // Graph-only blocker-relationship filter: keep tasks that touch at least
+  // one in-scope edge (have a blocker that's still in `out`, or are a blocker
+  // for some other in-scope task). Single pass: edges removed by a follow-up
+  // filter pass aren't recomputed -- the graph won't render dangling edges
+  // because layout.pos drops endpoints that aren't in the final task list.
+  if (Store.view === 'graph' && Store.graphBlockerOnly) {
+    const ids = new Set(out.map(t => t.id));
+    const referenced = new Set();
+    out.forEach(t => Util.blockers(t).forEach(bid => { if (ids.has(bid)) referenced.add(bid); }));
+    out = out.filter(t => {
+      if (referenced.has(t.id)) return true;
+      return Util.blockers(t).some(bid => ids.has(bid));
+    });
+  }
   if (Store.search) out = Util.fuzzy(Store.search, out);
   return out;
 }
@@ -3680,6 +3916,31 @@ function paletteItems() {
       label: Store.readyStrict ? 'Ready queue: expanded view (show in-progress + blocked)' : 'Ready queue: strict view (match AI)',
       run: () => Actions.toggleReadyStrict(),
     });
+  }
+
+  if (listFiltersActive()) {
+    items.push({
+      type: 'filter',
+      label: 'Clear list filters (status / priority)',
+      run: () => Actions.clearListFilters(),
+    });
+  }
+
+  if (Store.view === 'graph') {
+    items.push({
+      type: 'filter',
+      label: Store.graphBlockerOnly
+        ? 'Graph: show all tasks (clear with-deps filter)'
+        : 'Graph: show only tasks with dependencies',
+      run: () => Actions.toggleGraphBlockerOnly(),
+    });
+    if (graphFiltersActive()) {
+      items.push({
+        type: 'filter',
+        label: 'Clear graph filters (priority / with-deps)',
+        run: () => Actions.clearGraphFilters(),
+      });
+    }
   }
 
   items.push({
@@ -3757,7 +4018,7 @@ function groupedByStatus(tasks) {
   const buckets = {};
   order.forEach(s => buckets[s] = []);
   tasks.forEach(t => { if (buckets[t.status]) buckets[t.status].push(t); });
-  return order.filter(s => buckets[s].length).map(s => ({ key: s, items: buckets[s] }));
+  return order.filter(s => buckets[s].length).map(s => ({ key: s, items: applyListSort(buckets[s]) }));
 }
 
 function groupedReadyExpanded(tasks, byId) {
@@ -3774,10 +4035,152 @@ function groupedReadyExpanded(tasks, byId) {
     (isReady ? ready : blocked).push(t);
   });
   const out = [];
-  if (ready.length)      out.push({ key: 'ready',       label: 'Ready',       items: ready });
-  if (inProgress.length) out.push({ key: 'in_progress', label: 'In progress', items: inProgress });
-  if (blocked.length)    out.push({ key: 'blocked',     label: 'Blocked',     items: blocked });
+  if (ready.length)      out.push({ key: 'ready',       label: 'Ready',       items: applyListSort(ready) });
+  if (inProgress.length) out.push({ key: 'in_progress', label: 'In progress', items: applyListSort(inProgress) });
+  if (blocked.length)    out.push({ key: 'blocked',     label: 'Blocked',     items: applyListSort(blocked) });
   return out;
+}
+
+// Sort a list of tasks per Store.listSort. Returns the same array unchanged
+// for the default key (preserves the upstream sort_order order). For other
+// keys returns a sorted copy. Priority 0 (unset) is treated as the lowest
+// priority regardless of direction so it always lands at the bottom of the
+// list -- otherwise "ascending priority" would surface unset tasks ahead of
+// real URGENT work, which is misleading.
+function applyListSort(items) {
+  const s = Store.listSort || LIST_SORT_DEFAULT;
+  if (s.key === 'default' || items.length < 2) return items;
+  const sign = s.dir === 'desc' ? -1 : 1;
+  const out = items.slice();
+  const priWeight = p => (p === 0 ? 99 : p);
+  if (s.key === 'priority') {
+    out.sort((a, b) => sign * (priWeight(a.priority) - priWeight(b.priority)));
+  } else if (s.key === 'id') {
+    out.sort((a, b) => sign * (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  } else if (s.key === 'updated') {
+    out.sort((a, b) => {
+      const av = a.updated_at || '', bv = b.updated_at || '';
+      return sign * (av < bv ? -1 : av > bv ? 1 : 0);
+    });
+  }
+  return out;
+}
+
+// Sort options surfaced in the list-view sort dropdown. value is "<key>:<dir>"
+// so a single <select> change carries both axes.
+const LIST_SORT_OPTIONS = [
+  { value: 'default:asc',   label: 'Default (status / sort order)' },
+  { value: 'priority:asc',  label: 'Priority — most urgent first' },
+  { value: 'priority:desc', label: 'Priority — least urgent first' },
+  { value: 'updated:desc',  label: 'Last modified — newest first' },
+  { value: 'updated:asc',   label: 'Last modified — oldest first' },
+  { value: 'id:asc',        label: 'UUID — ascending' },
+  { value: 'id:desc',       label: 'UUID — descending' },
+];
+
+function listSortToolbar() {
+  const s = Store.listSort || LIST_SORT_DEFAULT;
+  const current = s.key + ':' + s.dir;
+  const active = s.key !== 'default';
+  const arrow = s.dir === 'desc' ? '▾' : '▴';
+  const opts = LIST_SORT_OPTIONS.map(o =>
+    '<option value="' + o.value + '"' + (o.value === current ? ' selected' : '') + '>' +
+    Util.esc(o.label) + '</option>').join('');
+  return '<div class="list-toolbar" role="toolbar" aria-label="List sort">' +
+    '<span class="label">Sort</span>' +
+    '<select data-act="list-sort" aria-label="Sort tasks by">' + opts + '</select>' +
+    '<span class="indicator' + (active ? ' active' : '') + '" aria-hidden="true" title="' +
+      (active ? 'Custom sort active' : 'Default sort') + '">' +
+      (active ? arrow + ' sorted' : '·') +
+    '</span>' +
+  '</div>';
+}
+
+// Status / priority filter chips. Toolbar is rendered above the sort toolbar
+// in every theme's list view; pills toggle their value in/out of the
+// corresponding Set in Store. Empty set on both axes = no filter applied;
+// "Clear filters" only renders when at least one chip is on. The chip data-act
+// values are wired in the global click handler.
+const STATUS_FILTER_LABELS = {
+  todo: 'Todo',
+  in_progress: 'In progress',
+  blocker: 'Blocker',
+  done: 'Done',
+  closed: 'Closed',
+};
+const PRIORITY_FILTER_LABELS = {
+  1: 'P1',
+  2: 'P2',
+  3: 'P3',
+  0: 'Unset',
+};
+function listFilterToolbar() {
+  const sf = Store.statusFilter || new Set();
+  const pf = Store.priorityFilter || new Set();
+  const active = sf.size > 0 || pf.size > 0;
+  const statusChips = STATUS_FILTER_VALUES.map(v => {
+    const on = sf.has(v);
+    return '<button type="button" class="filter-chip f-status f-s-' + v +
+      (on ? ' active' : '') + '" data-act="filter-status" data-value="' + v +
+      '" aria-pressed="' + (on ? 'true' : 'false') + '">' +
+      Util.esc(STATUS_FILTER_LABELS[v]) +
+    '</button>';
+  }).join('');
+  const priChips = PRIORITY_FILTER_VALUES.map(v => {
+    const on = pf.has(v);
+    return '<button type="button" class="filter-chip f-pri f-p-' + v +
+      (on ? ' active' : '') + '" data-act="filter-priority" data-value="' + v +
+      '" aria-pressed="' + (on ? 'true' : 'false') + '">' +
+      Util.esc(PRIORITY_FILTER_LABELS[v]) +
+    '</button>';
+  }).join('');
+  const clearBtn = active
+    ? '<button type="button" class="filter-clear" data-act="filter-clear" title="Clear status and priority filters">Clear filters</button>'
+    : '';
+  return '<div class="list-toolbar list-filter-toolbar' + (active ? ' has-active' : '') +
+    '" role="toolbar" aria-label="List filter">' +
+    '<span class="label">Filter</span>' +
+    '<span class="filter-group" role="group" aria-label="Status">' + statusChips + '</span>' +
+    '<span class="filter-divider" aria-hidden="true">·</span>' +
+    '<span class="filter-group" role="group" aria-label="Priority">' + priChips + '</span>' +
+    clearBtn +
+  '</div>';
+}
+
+// Graph filter toolbar: priority chips (shared with list view via
+// Store.priorityFilter) plus a graph-only "with deps" toggle that hides
+// isolated nodes. Status filter is intentionally omitted -- the graph mostly
+// shows topology and status emphasis lives in node styling, not chips.
+function graphFilterToolbar() {
+  const pf = Store.priorityFilter || new Set();
+  const blockerOnly = !!Store.graphBlockerOnly;
+  const active = pf.size > 0 || blockerOnly;
+  const priChips = PRIORITY_FILTER_VALUES.map(v => {
+    const on = pf.has(v);
+    return '<button type="button" class="filter-chip f-pri f-p-' + v +
+      (on ? ' active' : '') + '" data-act="filter-priority" data-value="' + v +
+      '" aria-pressed="' + (on ? 'true' : 'false') + '">' +
+      Util.esc(PRIORITY_FILTER_LABELS[v]) +
+    '</button>';
+  }).join('');
+  const blockerChip = '<button type="button" class="filter-chip f-blk' +
+    (blockerOnly ? ' active' : '') +
+    '" data-act="filter-graph-blocker"' +
+    ' aria-pressed="' + (blockerOnly ? 'true' : 'false') +
+    '" title="Show only tasks that have a blocker or are blocking another task">' +
+    'With deps' +
+  '</button>';
+  const clearBtn = active
+    ? '<button type="button" class="filter-clear" data-act="filter-graph-clear" title="Clear graph filters">Clear filters</button>'
+    : '';
+  return '<div class="list-toolbar list-filter-toolbar graph-filter-toolbar' + (active ? ' has-active' : '') +
+    '" role="toolbar" aria-label="Graph filter">' +
+    '<span class="label">Filter</span>' +
+    '<span class="filter-group" role="group" aria-label="Priority">' + priChips + '</span>' +
+    '<span class="filter-divider" aria-hidden="true">·</span>' +
+    '<span class="filter-group" role="group" aria-label="Edges">' + blockerChip + '</span>' +
+    clearBtn +
+  '</div>';
 }
 
 function readyExpandedActive() {
@@ -4235,11 +4638,18 @@ function obsKanbanCard(T, t, byId) {
 
 function obsGraphView(T, tasks, byId, ctx) {
   if (!tasks.length) {
-    return '<div class="graph"><div class="empty">' +
-      (hasActiveScope()
-        ? 'No tasks' + (Store.search ? ' match \u201C' + Util.esc(Store.search) + '\u201D' : '') + '. Press <kbd>c</kbd> to create.'
-        : 'Select or create a project to get started.') +
-    '</div></div>';
+    if (!hasActiveScope()) {
+      return '<div class="graph"><div class="empty">' +
+        'Select or create a project to get started.' +
+      '</div></div>';
+    }
+    const filtersOn = graphFiltersActive();
+    const searchOn = !!Store.search;
+    const msg = filtersOn
+      ? 'No tasks match the current filters' + (searchOn ? ' and “' + Util.esc(Store.search) + '”' : '') + '.'
+      : (searchOn ? 'No tasks match “' + Util.esc(Store.search) + '”.' : 'No tasks. Press <kbd>c</kbd> to create.');
+    return '<div class="graph">' + graphFilterToolbar() +
+      '<div class="empty">' + msg + '</div></div>';
   }
   const layout = Graph.layout(tasks, byId, {
     W: 168, H: 62, gapX: 22, gapY: 34, padX: 28, padY: 28, rankGap: 14,
@@ -4295,6 +4705,7 @@ function obsGraphView(T, tasks, byId, ctx) {
       '<span class="dot">\u00B7</span>' +
       '<span>' + readyInView + ' ready / ' + tasks.length + (inTree ? ' in flight' : ' total') + '</span>' +
     '</div>' +
+    graphFilterToolbar() +
     '<svg class="graph-svg" width="' + layout.width + '" height="' + layout.height + '">' +
       '<defs>' +
         '<marker id="obs-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="arrow open"></path></marker>' +
@@ -4311,10 +4722,18 @@ function obsListView(T, tasks, byId, ctx) {
   const showBanner = Store.filter === 'ready' && Store.view === 'list';
   const banner = showBanner ? readyBannerHTML(ctx ? ctx.ready.length : Util.ready(Store.tasks).length) : '';
   if (!tasks.length) {
-    return '<div class="list">' + banner + '<div class="empty">' +
-      (hasActiveScope() ? 'No tasks' + (Store.search ? ' match “' + Util.esc(Store.search) + '”' : '') + '. Press <kbd>c</kbd> to create.'
-        : 'Select or create a project to get started.') +
-    '</div></div>';
+    if (!hasActiveScope()) {
+      return '<div class="list">' + banner + '<div class="empty">' +
+        'Select or create a project to get started.' +
+      '</div></div>';
+    }
+    const filtersOn = listFiltersActive();
+    const searchOn = !!Store.search;
+    const msg = filtersOn
+      ? 'No tasks match the current filters' + (searchOn ? ' and “' + Util.esc(Store.search) + '”' : '') + '.'
+      : (searchOn ? 'No tasks match “' + Util.esc(Store.search) + '”.' : 'No tasks. Press <kbd>c</kbd> to create.');
+    return '<div class="list">' + banner + listFilterToolbar() +
+      '<div class="empty">' + msg + '</div></div>';
   }
   const expanded = readyExpandedActive();
   const groups = expanded ? groupedReadyExpanded(tasks, byId) : groupedByStatus(tasks);
@@ -4332,6 +4751,8 @@ function obsListView(T, tasks, byId, ctx) {
   };
   return '<div class="list" role="grid" aria-label="Task list">' +
     banner +
+    listFilterToolbar() +
+    listSortToolbar() +
     groups.map(g => {
       const label = g.label || (T_META[g.key] ? T_META[g.key].label : g.key);
       return '<div class="list-group" role="rowgroup">' +
@@ -4724,11 +5145,18 @@ function conKanbanCard(T, t, byId) {
 
 function conGraphView(T, tasks, byId, ctx) {
   if (!tasks.length) {
-    return '<div class="graph"><div class="empty">' +
-      (hasActiveScope()
-        ? '$ no tasks' + (Store.search ? ' match \u201C' + Util.esc(Store.search) + '\u201D' : '') + '. press <kbd>c</kbd> to create.'
-        : '$ select or create a project to get started.') +
-    '</div></div>';
+    if (!hasActiveScope()) {
+      return '<div class="graph"><div class="empty">' +
+        '$ select or create a project to get started.' +
+      '</div></div>';
+    }
+    const filtersOn = graphFiltersActive();
+    const searchOn = !!Store.search;
+    const msg = filtersOn
+      ? '$ no tasks match the current filters' + (searchOn ? ' and \u201C' + Util.esc(Store.search) + '\u201D' : '') + '.'
+      : (searchOn ? '$ no tasks match \u201C' + Util.esc(Store.search) + '\u201D.' : '$ no tasks. press <kbd>c</kbd> to create.');
+    return '<div class="graph">' + graphFilterToolbar() +
+      '<div class="empty">' + msg + '</div></div>';
   }
   const layout = Graph.layout(tasks, byId, {
     W: 168, H: 58, gapX: 18, gapY: 30, padX: 20, padY: 20, rankGap: 12,
@@ -4780,6 +5208,7 @@ function conGraphView(T, tasks, byId, ctx) {
       '<span>topological \u00B7 top\u2192down \u00B7 ' + readyInView + ' ready</span>' +
       '<span><span class="d-ready">\u25CF</span> ready \u00B7 <span class="d-blk">\u25CF</span> blocked \u00B7 <span class="d-act">\u25CF</span> in-flight</span>' +
     '</div>' +
+    graphFilterToolbar() +
     '<svg class="graph-svg" width="' + layout.width + '" height="' + layout.height + '">' +
       '<defs>' +
         '<marker id="con-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="arrow open"></path></marker>' +
@@ -4796,16 +5225,25 @@ function conListView(T, tasks, byId, ctx) {
   const showBanner = Store.filter === 'ready' && Store.view === 'list';
   const banner = showBanner ? readyBannerHTML(ctx ? ctx.ready.length : Util.ready(Store.tasks).length) : '';
   if (!tasks.length) {
-    return '<div class="list">' + banner + '<div class="empty">' +
-      (hasActiveScope()
-        ? '$ no tasks' + (Store.search ? ' match “' + Util.esc(Store.search) + '”' : '') + '. press <kbd>c</kbd> to create.'
-        : '$ select or create a project to get started.') +
-    '</div></div>';
+    if (!hasActiveScope()) {
+      return '<div class="list">' + banner + '<div class="empty">' +
+        '$ select or create a project to get started.' +
+      '</div></div>';
+    }
+    const filtersOn = listFiltersActive();
+    const searchOn = !!Store.search;
+    const msg = filtersOn
+      ? '$ no tasks match the current filters' + (searchOn ? ' and “' + Util.esc(Store.search) + '”' : '') + '.'
+      : (searchOn ? '$ no tasks match “' + Util.esc(Store.search) + '”.' : '$ no tasks. press <kbd>c</kbd> to create.');
+    return '<div class="list">' + banner + listFilterToolbar() +
+      '<div class="empty">' + msg + '</div></div>';
   }
   const expanded = readyExpandedActive();
   const groups = expanded ? groupedReadyExpanded(tasks, byId) : groupedByStatus(tasks);
   return '<div class="list" role="grid" aria-label="Task list">' +
     banner +
+    listFilterToolbar() +
+    listSortToolbar() +
     groups.map(g => {
       const meta = T.statusMeta[g.key];
       const label = g.label || (meta ? meta.label : g.key);
@@ -5190,11 +5628,18 @@ function dosKanbanCard(T, t, byId) {
 
 function dosGraphView(T, tasks, byId, ctx) {
   if (!tasks.length) {
-    return '<div class="graph"><div class="empty">' +
-      (hasActiveScope()
-        ? '\u2014 No entries' + (Store.search ? ' matching \u201C' + Util.esc(Store.search) + '\u201D' : '') + '. Press c to compose. \u2014'
-        : '\u2014 Select or create a project to get started. \u2014') +
-    '</div></div>';
+    if (!hasActiveScope()) {
+      return '<div class="graph"><div class="empty">' +
+        '\u2014 Select or create a project to get started. \u2014' +
+      '</div></div>';
+    }
+    const filtersOn = graphFiltersActive();
+    const searchOn = !!Store.search;
+    const msg = filtersOn
+      ? '\u2014 No entries match the current filters' + (searchOn ? ' and \u201C' + Util.esc(Store.search) + '\u201D' : '') + '. \u2014'
+      : (searchOn ? '\u2014 No entries matching \u201C' + Util.esc(Store.search) + '\u201D. \u2014' : '\u2014 No entries. Press c to compose. \u2014');
+    return '<div class="graph">' + graphFilterToolbar() +
+      '<div class="empty">' + msg + '</div></div>';
   }
   const layout = Graph.layout(tasks, byId, {
     W: 188, H: 74, gapX: 28, gapY: 44, padX: 32, padY: 24, rankGap: 18,
@@ -5247,6 +5692,7 @@ function dosGraphView(T, tasks, byId, ctx) {
       '<div class="head-title">Lineage</div>' +
       '<div class="head-sub">dependency graph \u00B7 ' + readyInView + ' ready of ' + tasks.length + (inTree ? ' in flight' : ' total') + '</div>' +
     '</div>' +
+    graphFilterToolbar() +
     '<svg class="graph-svg" width="' + layout.width + '" height="' + layout.height + '">' +
       '<defs>' +
         '<marker id="dos-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="arrow open"></path></marker>' +
@@ -5263,11 +5709,18 @@ function dosListView(T, tasks, byId, ctx) {
   const showBanner = Store.filter === 'ready' && Store.view === 'list';
   const banner = showBanner ? readyBannerHTML(ctx ? ctx.ready.length : Util.ready(Store.tasks).length) : '';
   if (!tasks.length) {
-    return '<div class="list">' + banner + '<div class="empty">' +
-      (hasActiveScope()
-        ? '\u2014 No entries' + (Store.search ? ' matching \u201C' + Util.esc(Store.search) + '\u201D' : '') + '. Press c to compose. \u2014'
-        : '\u2014 Select or create a project to get started. \u2014') +
-    '</div></div>';
+    if (!hasActiveScope()) {
+      return '<div class="list">' + banner + '<div class="empty">' +
+        '\u2014 Select or create a project to get started. \u2014' +
+      '</div></div>';
+    }
+    const filtersOn = listFiltersActive();
+    const searchOn = !!Store.search;
+    const msg = filtersOn
+      ? '\u2014 No entries match the current filters' + (searchOn ? ' and \u201C' + Util.esc(Store.search) + '\u201D' : '') + '. \u2014'
+      : (searchOn ? '\u2014 No entries matching \u201C' + Util.esc(Store.search) + '\u201D. \u2014' : '\u2014 No entries. Press c to compose. \u2014');
+    return '<div class="list">' + banner + listFilterToolbar() +
+      '<div class="empty">' + msg + '</div></div>';
   }
   const expanded = readyExpandedActive();
   const groups = expanded ? groupedReadyExpanded(tasks, byId) : groupedByStatus(tasks);
@@ -5279,6 +5732,8 @@ function dosListView(T, tasks, byId, ctx) {
   let runningIdx = 0;
   return '<div class="list" role="grid" aria-label="Task list">' +
     banner +
+    listFilterToolbar() +
+    listSortToolbar() +
     groups.map(g => {
       const meta = T.statusMeta[g.key];
       const rawLabel = g.label || (meta ? meta.label : g.key);
@@ -5610,6 +6065,11 @@ app.addEventListener('click', async (e) => {
     case 'scope-all': Actions.setScopeAll(); return;
     case 'toggle-ready': Actions.toggleReadyFilter(); return;
     case 'toggle-ready-strict': Actions.toggleReadyStrict(); return;
+    case 'filter-status': Actions.toggleStatusFilter(el.dataset.value); return;
+    case 'filter-priority': Actions.togglePriorityFilter(el.dataset.value); return;
+    case 'filter-clear': Actions.clearListFilters(); return;
+    case 'filter-graph-blocker': Actions.toggleGraphBlockerOnly(); return;
+    case 'filter-graph-clear': Actions.clearGraphFilters(); return;
     case 'mark-all-seen': Actions.markAllSeen(); return;
     case 'new-project': Actions.openNewProject(); return;
     case 'close-new-project': Actions.closeNewProject(); return;
@@ -5697,6 +6157,7 @@ app.addEventListener('change', async (e) => {
   if (!act) return;
   switch (act) {
     case 'theme': Actions.setTheme(el.value); return;
+    case 'list-sort': Actions.setListSort(el.value); return;
     case 'composer-project': Actions.setComposerProject(el.value); return;
     case 'detail-status':
       if (Store.selectedId) await Actions.saveTaskEdit(Store.selectedId, { status: el.value });
