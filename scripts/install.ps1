@@ -64,11 +64,37 @@ function Install-GCC {
     return $gcc
 }
 
+function Stop-RunningSegments {
+    $sg = Join-Path $InstallDir "sg.exe"
+    $segments = Join-Path $InstallDir "segments.exe"
+    $stopper = if (Test-Path $sg) { $sg } elseif (Test-Path $segments) { $segments } else { $null }
+    if ($stopper) {
+        Info "Stopping running server..."
+        $ErrorActionPreference = "Continue"
+        & $stopper stop *> $null
+        $ErrorActionPreference = "Stop"
+    }
+    # Get-Process -Name strips .exe, so "segments" matches segments.exe and any
+    # bare `segments`. Same for "sg".
+    foreach ($procName in @("segments", "sg")) {
+        Get-Process -Name $procName -ErrorAction SilentlyContinue | ForEach-Object {
+            Info "  killing stale $procName (pid $($_.Id))"
+            try { $_.Kill() } catch { }
+        }
+    }
+    Start-Sleep -Milliseconds 500
+}
+
 function Install-FromRelease {
     try {
-        $resp = Invoke-RestMethod -Uri "$Gitea/api/v1/repos/$Repo/releases/latest" -ErrorAction Stop
-        $version = $resp.tag_name
-        $asset = $resp.assets | Where-Object { $_.name -match "windows" -and $_.name -match "\.exe$" } | Select-Object -First 1
+        # Use the list endpoint with limit=1 instead of /releases/latest so that
+        # prereleases are not silently skipped (Gitea hides prereleases from
+        # /releases/latest the same way GitHub does).
+        $resp = Invoke-RestMethod -Uri "$Gitea/api/v1/repos/$Repo/releases?limit=1" -ErrorAction Stop
+        if (-not $resp -or $resp.Count -eq 0) { return $false }
+        $release = $resp[0]
+        $version = $release.tag_name
+        $asset = $release.assets | Where-Object { $_.name -match "windows" -and $_.name -match "\.exe$" } | Select-Object -First 1
         if ($asset) {
             Info "Downloading segments $version..."
             $tmp = "$env:TEMP\segments.exe"
@@ -154,12 +180,17 @@ Write-Host ""
 Info "Installing Segments..."
 Write-Host ""
 
+Stop-RunningSegments
+
 if (-not (Install-FromRelease)) {
     Install-FromSource
 }
 
-# Create sg alias (copy, since Windows doesn't have symlinks without admin)
+# Create sg alias (copy, since Windows doesn't have symlinks without admin).
+# Also write bare `sg` -- Git Bash resolves it ahead of `sg.exe` when both
+# exist, so leaving a stale bare `sg` silently shadows the new binary.
 Copy-Item "$InstallDir\segments.exe" "$InstallDir\sg.exe" -Force
+Copy-Item "$InstallDir\segments.exe" "$InstallDir\sg" -Force
 
 Add-ToPath
 

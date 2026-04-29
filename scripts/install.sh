@@ -31,8 +31,26 @@ detect_platform() {
 }
 
 latest_release() {
-  curl -fsSL "${GITEA}/api/v1/repos/${REPO}/releases/latest" 2>/dev/null \
-    | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['tag_name'])" 2>/dev/null
+  # Use the list endpoint with limit=1 instead of /releases/latest so that
+  # prereleases are not silently skipped (Gitea hides prereleases from
+  # /releases/latest the same way GitHub does).
+  curl -fsSL "${GITEA}/api/v1/repos/${REPO}/releases?limit=1" 2>/dev/null \
+    | python3 -c "import sys,json; d=json.load(sys.stdin); print(d[0]['tag_name'] if d else '')" 2>/dev/null
+}
+
+stop_running_daemon() {
+  local sg="${INSTALL_DIR}/sg"
+  local segments="${INSTALL_DIR}/segments"
+  if [ -x "$sg" ]; then
+    info "Stopping running server..."
+    "$sg" stop >/dev/null 2>&1 || true
+  elif [ -x "$segments" ]; then
+    info "Stopping running server..."
+    "$segments" stop >/dev/null 2>&1 || true
+  fi
+  pkill -x segments >/dev/null 2>&1 || true
+  pkill -x sg >/dev/null 2>&1 || true
+  sleep 1
 }
 
 install_from_release() {
@@ -85,6 +103,8 @@ add_to_path() {
 main() {
   local platform
   platform=$(detect_platform)
+
+  stop_running_daemon
 
   if ! install_from_release "$platform"; then
     install_from_source
