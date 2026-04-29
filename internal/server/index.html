@@ -698,7 +698,8 @@ body[data-theme="obsidian"] .graph-svg .g-node.s-blocker .bg {
   stroke-width: 1.3;
   stroke-dasharray: 4 2.5;
 }
-/* P1 priority emphasis: thicker outline for urgent nodes */
+/* P0 (INCIDENT) and P1 (SHIP-CRITICAL) emphasis: thicker outline for urgent nodes */
+body[data-theme="obsidian"] .graph-svg .g-node.p-0 .bg,
 body[data-theme="obsidian"] .graph-svg .g-node.p-1 .bg { stroke-width: 1.5; }
 /* "Currently blocking other work" emphasis: warm amber border + secondary
    left ribbon next to the status bar + bold tag in meta line. Amber is
@@ -725,6 +726,7 @@ body[data-theme="obsidian"] .graph-svg .g-pri {
   font-variant-numeric: tabular-nums;
   fill: var(--seg-faint);
 }
+body[data-theme="obsidian"] .graph-svg .g-pri.p-0 { fill: var(--seg-blocker); font-weight: 700; }
 body[data-theme="obsidian"] .graph-svg .g-pri.p-1 { fill: var(--seg-blocker); }
 body[data-theme="obsidian"] .graph-svg .g-pri.p-2 { fill: var(--seg-accent); }
 body[data-theme="obsidian"] .graph-svg .g-pri.p-3 { fill: var(--seg-faint); opacity: 0.7; }
@@ -1478,7 +1480,8 @@ body[data-theme="console"] .graph-svg .g-node.s-blocker .bar {
   animation: segConBlockBar 1.6s ease-in-out infinite;
 }
 @keyframes segConBlockBar { 0%,100% { opacity: 0.55; } 50% { opacity: 1; } }
-/* P1 emphasis: amber double-stroke outline */
+/* P0 (INCIDENT) and P1 (SHIP-CRITICAL) emphasis: thicker outline */
+body[data-theme="console"] .graph-svg .g-node.p-0 .bg,
 body[data-theme="console"] .graph-svg .g-node.p-1 .bg { stroke-width: 1.5; }
 /* "Currently blocking other work" emphasis: amber border + bold deps tag */
 body[data-theme="console"] .graph-svg .g-node.is-blocking .bg {
@@ -1501,6 +1504,7 @@ body[data-theme="console"] .graph-svg .g-meta {
 body[data-theme="console"] .graph-svg .g-meta .g-pri {
   font-weight: 600;
 }
+body[data-theme="console"] .graph-svg .g-meta .g-pri.p-0 { fill: var(--seg-red); font-weight: 800; }
 body[data-theme="console"] .graph-svg .g-meta .g-pri.p-1 { fill: var(--seg-red); }
 body[data-theme="console"] .graph-svg .g-meta .g-pri.p-2 { fill: var(--seg-amber); }
 body[data-theme="console"] .graph-svg .g-meta .g-pri.p-3 { fill: var(--seg-muted); opacity: 0.7; }
@@ -2405,7 +2409,8 @@ body[data-theme="dossier"] .graph-svg .g-node.s-blocker .bg {
   stroke-width: 1.25;
   stroke-dasharray: 5 2;
 }
-/* P1 emphasis */
+/* P0 (INCIDENT) and P1 (SHIP-CRITICAL) emphasis */
+body[data-theme="dossier"] .graph-svg .g-node.p-0 .bg,
 body[data-theme="dossier"] .graph-svg .g-node.p-1 .bg { stroke-width: 1; }
 /* "Currently blocking other work" emphasis: solid accent border + bold deps tag */
 body[data-theme="dossier"] .graph-svg .g-node.is-blocking .bg {
@@ -2434,6 +2439,7 @@ body[data-theme="dossier"] .graph-svg .g-meta .g-pri {
   font-weight: 600;
   letter-spacing: 0;
 }
+body[data-theme="dossier"] .graph-svg .g-meta .g-pri.p-0 { fill: var(--seg-blocker); font-size: 11px; font-weight: 700; }
 body[data-theme="dossier"] .graph-svg .g-meta .g-pri.p-1 { fill: var(--seg-blocker); font-size: 10px; }
 body[data-theme="dossier"] .graph-svg .g-meta .g-pri.p-2 { fill: var(--seg-text); }
 body[data-theme="dossier"] .graph-svg .g-meta .g-pri.p-3 { fill: var(--seg-muted); opacity: 0.7; }
@@ -2832,7 +2838,7 @@ const Store = {
   readyStrict: loadPref('ui.ready-strict', null) === 'true', // true = strict, false = widened (persisted)
   listSort: loadListSortPref(),            // { key, dir } -- list view sort state, persisted
   statusFilter: loadStatusFilterPref(),    // Set<string> -- empty set = no status filter, persisted
-  priorityFilter: loadPriorityFilterPref(),// Set<number> -- empty set = no priority filter (0=unset), persisted
+  priorityFilter: loadPriorityFilterPref(),// Set<number> 0..3 -- empty set = no priority filter, persisted
   graphBlockerOnly: loadPref('ui.graph-blocker-only', null) === 'true', // graph-only: hide isolated nodes, persisted
   composerOpen: false,
   composerTitle: '',             // staged new-task title (survives re-render)
@@ -2932,7 +2938,7 @@ function savePriorityFilterPref(s) {
   } catch (e) {}
 }
 const STATUS_FILTER_VALUES = ['todo', 'in_progress', 'blocker', 'done', 'closed'];
-const PRIORITY_FILTER_VALUES = [1, 2, 3, 0]; // display order; 0 = unset
+const PRIORITY_FILTER_VALUES = [0, 1, 2, 3];
 function listFiltersActive() {
   return (Store.statusFilter && Store.statusFilter.size > 0) ||
          (Store.priorityFilter && Store.priorityFilter.size > 0);
@@ -3126,7 +3132,8 @@ function filterBlockerCandidates(q, excludeId, showFinished) {
       const sa = statusRank[a.status] == null ? 9 : statusRank[a.status];
       const sb = statusRank[b.status] == null ? 9 : statusRank[b.status];
       if (sa !== sb) return sa - sb;
-      const pa = (a.priority || 9), pb = (b.priority || 9);
+      const pa = (a.priority >= 0 && a.priority <= 3) ? a.priority : 9;
+      const pb = (b.priority >= 0 && b.priority <= 3) ? b.priority : 9;
       if (pa !== pb) return pa - pb;
       return (a.title || '').localeCompare(b.title || '');
     });
@@ -3192,7 +3199,7 @@ function renderBlockerCombo(scope, currentId, excludeId) {
     : items.map((t, i) => {
         const idx = i + 1;
         const sel = idx === cursor ? ' selected' : '';
-        const pri = (t.priority != null && t.priority !== 0) ? 'P' + t.priority : '';
+        const pri = (t.priority >= 0 && t.priority <= 3) ? 'P' + t.priority : '';
         return '<div class="blocker-combo-opt' + sel + '" role="option"' +
           ' data-act="blocker-combo-pick" data-scope="' + scope + '"' +
           ' data-id="' + Util.esc(t.id) + '" data-idx="' + idx + '"' +
@@ -4041,18 +4048,15 @@ function groupedReadyExpanded(tasks, byId) {
   return out;
 }
 
-// Sort a list of tasks per Store.listSort. Returns the same array unchanged
-// for the default key (preserves the upstream sort_order order). For other
-// keys returns a sorted copy. Priority 0 (unset) is treated as the lowest
-// priority regardless of direction so it always lands at the bottom of the
-// list -- otherwise "ascending priority" would surface unset tasks ahead of
-// real URGENT work, which is misleading.
+// Sort a list of tasks per Store.listSort. Default key returns the input
+// unchanged so upstream sort_order survives. Out-of-range priorities fall to
+// the bottom so a stray legacy value never out-ranks a real INCIDENT row.
 function applyListSort(items) {
   const s = Store.listSort || LIST_SORT_DEFAULT;
   if (s.key === 'default' || items.length < 2) return items;
   const sign = s.dir === 'desc' ? -1 : 1;
   const out = items.slice();
-  const priWeight = p => (p === 0 ? 99 : p);
+  const priWeight = p => (p >= 0 && p <= 3 ? p : 99);
   if (s.key === 'priority') {
     out.sort((a, b) => sign * (priWeight(a.priority) - priWeight(b.priority)));
   } else if (s.key === 'id') {
@@ -4109,10 +4113,16 @@ const STATUS_FILTER_LABELS = {
   closed: 'Closed',
 };
 const PRIORITY_FILTER_LABELS = {
+  0: 'P0',
   1: 'P1',
   2: 'P2',
   3: 'P3',
-  0: 'Unset',
+};
+const PRIORITY_FILTER_TITLES = {
+  0: 'P0 · INCIDENT (drop everything)',
+  1: 'P1 · SHIP-CRITICAL (required for v1)',
+  2: 'P2 · STANDARD (planned work)',
+  3: 'P3 · EXTRA (nice-to-have)',
 };
 function listFilterToolbar() {
   const sf = Store.statusFilter || new Set();
@@ -4130,7 +4140,8 @@ function listFilterToolbar() {
     const on = pf.has(v);
     return '<button type="button" class="filter-chip f-pri f-p-' + v +
       (on ? ' active' : '') + '" data-act="filter-priority" data-value="' + v +
-      '" aria-pressed="' + (on ? 'true' : 'false') + '">' +
+      '" aria-pressed="' + (on ? 'true' : 'false') +
+      '" title="' + Util.esc(PRIORITY_FILTER_TITLES[v]) + '">' +
       Util.esc(PRIORITY_FILTER_LABELS[v]) +
     '</button>';
   }).join('');
@@ -4159,7 +4170,8 @@ function graphFilterToolbar() {
     const on = pf.has(v);
     return '<button type="button" class="filter-chip f-pri f-p-' + v +
       (on ? ' active' : '') + '" data-act="filter-priority" data-value="' + v +
-      '" aria-pressed="' + (on ? 'true' : 'false') + '">' +
+      '" aria-pressed="' + (on ? 'true' : 'false') +
+      '" title="' + Util.esc(PRIORITY_FILTER_TITLES[v]) + '">' +
       Util.esc(PRIORITY_FILTER_LABELS[v]) +
     '</button>';
   }).join('');
@@ -4681,8 +4693,9 @@ function obsGraphView(T, tasks, byId, ctx) {
     if (isReady) cls.push('ready');
     if (blocks > 0) cls.push('is-blocking');
     if (focus && !focus.has(t.id)) cls.push('off');
-    const priChip = t.priority === 0 ? '' :
-      '<text class="g-pri p-' + t.priority + '" x="' + (layout.W - 8) + '" y="14" text-anchor="end">P' + t.priority + '</text>';
+    const priChip = (t.priority >= 0 && t.priority <= 3)
+      ? '<text class="g-pri p-' + t.priority + '" x="' + (layout.W - 8) + '" y="14" text-anchor="end">P' + t.priority + '</text>'
+      : '';
     const depsTag = blocks > 0 ? '<tspan class="g-deps">  \u2937' + blocks + '</tspan>' : '';
     return '<g class="' + cls.join(' ') + '" data-act="select" data-id="' + Util.esc(t.id) + '" transform="translate(' + p.x + ',' + p.y + ')">' +
       (isReady ? '<rect class="ring" x="-3" y="-3" width="' + (layout.W + 6) + '" height="' + (layout.H + 6) + '" rx="8"></rect>' : '') +
@@ -5188,8 +5201,9 @@ function conGraphView(T, tasks, byId, ctx) {
     if (isReady) cls.push('ready');
     if (blocks > 0) cls.push('is-blocking');
     if (focus && !focus.has(t.id)) cls.push('off');
-    const priTag = t.priority === 0 ? '' :
-      ' \u00B7 <tspan class="g-pri p-' + t.priority + '">[P' + t.priority + ']</tspan>';
+    const priTag = (t.priority >= 0 && t.priority <= 3)
+      ? ' \u00B7 <tspan class="g-pri p-' + t.priority + '">[P' + t.priority + ']</tspan>'
+      : '';
     const depsTag = blocks > 0 ? ' \u00B7 <tspan class="g-deps">[BLK&gt;' + blocks + ']</tspan>' : '';
     return '<g class="' + cls.join(' ') + '" data-act="select" data-id="' + Util.esc(t.id) + '" transform="translate(' + p.x + ',' + p.y + ')">' +
       (isReady ? '<rect class="ring" x="-2" y="-2" width="' + (layout.W + 4) + '" height="' + (layout.H + 4) + '"></rect>' : '') +
@@ -5673,8 +5687,9 @@ function dosGraphView(T, tasks, byId, ctx) {
     if (blocks > 0) cls.push('is-blocking');
     if (focus && !focus.has(t.id)) cls.push('off');
     const sm = meta[t.status] || { label: '?' };
-    const priRoman = t.priority === 0 ? '' :
-      ' \u00B7 <tspan class="g-pri p-' + t.priority + '">' + DOS_ROMAN[t.priority] + '</tspan>';
+    const priRoman = (t.priority >= 0 && t.priority <= 3)
+      ? ' \u00B7 <tspan class="g-pri p-' + t.priority + '">' + DOS_ROMAN[t.priority] + '</tspan>'
+      : '';
     const depsTag = blocks > 0 ? ' \u00B7 <tspan class="g-deps">BLOCKS ' + blocks + '</tspan>' : '';
     return '<g class="' + cls.join(' ') + '" data-act="select" data-id="' + Util.esc(t.id) + '" transform="translate(' + p.x + ',' + p.y + ')">' +
       (isReady ? '<rect class="ring" x="-4" y="-4" width="' + (layout.W + 8) + '" height="' + (layout.H + 8) + '"></rect>' : '') +
