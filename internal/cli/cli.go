@@ -76,20 +76,39 @@ func isRunning() bool {
 	return isProcessAlive(pid)
 }
 
-func pidFileData() (int, string, error) {
-	data, err := os.ReadFile(pidFile)
-	if err != nil {
-		return 0, "", err
+// pidFileData reads the daemon pid file. Format:
+//
+//	<pid>
+//	<web_addr_or_dash>
+//	<mcp_addr>
+//
+// "-" on the second line means web is disabled (port was taken at startup).
+// Legacy two-line files (pid + addr) are accepted for back-compat: both web
+// and mcp resolve to that single addr until the daemon is restarted.
+func pidFileData() (pid int, webAddr, mcpAddr string, err error) {
+	data, e := os.ReadFile(pidFile)
+	if e != nil {
+		return 0, "", "", e
 	}
-	lines := strings.SplitN(string(data), "\n", 3)
+	lines := strings.SplitN(string(data), "\n", 4)
 	if len(lines) < 2 {
-		return 0, "", fmt.Errorf("invalid pid file")
+		return 0, "", "", fmt.Errorf("invalid pid file")
 	}
-	pid, err := strconv.Atoi(strings.TrimSpace(lines[0]))
-	if err != nil {
-		return 0, "", err
+	pid, e = strconv.Atoi(strings.TrimSpace(lines[0]))
+	if e != nil {
+		return 0, "", "", e
 	}
-	return pid, strings.TrimSpace(lines[1]), nil
+	webAddr = strings.TrimSpace(lines[1])
+	if webAddr == "-" {
+		webAddr = ""
+	}
+	mcpAddr = webAddr
+	if len(lines) >= 3 {
+		if m := strings.TrimSpace(lines[2]); m != "" {
+			mcpAddr = m
+		}
+	}
+	return pid, webAddr, mcpAddr, nil
 }
 
 func notifyServer() {
@@ -142,22 +161,28 @@ func notifyServerEventFromAgent(source, typ string, data interface{}, agent *ana
 			exportWriter().Emit(typ, data)
 		}
 	}
-	pid, addr, err := pidFileData()
+	pid, _, mcpAddr, err := pidFileData()
 	if err != nil {
 		return
 	}
 	if p, err := os.FindProcess(pid); err != nil || p.Pid != pid {
 		return
 	}
-	if !strings.Contains(addr, ":") {
-		addr = "127.0.0.1:" + addr
+	if mcpAddr == "" {
+		return
+	}
+	if !strings.Contains(mcpAddr, ":") {
+		mcpAddr = "127.0.0.1:" + mcpAddr
 	}
 	var body []byte
 	if typ != "" {
 		body, _ = json.Marshal(map[string]interface{}{"type": typ, "data": data})
 	}
-	http.Post("http://"+addr+"/internal/sync", "application/json", bytes.NewReader(body))
+	notifyClient.Post("http://"+mcpAddr+"/internal/sync", "application/json", bytes.NewReader(body))
 }
+
+// Bounded so a wedged daemon does not stall every CLI write that calls notify.
+var notifyClient = &http.Client{Timeout: 2 * time.Second}
 
 var (
 	analyticsOnce sync.Once
@@ -542,6 +567,12 @@ func ensureDaemon() (int, error) {
 	}
 	pid := cmd.Process.Pid
 	cmd.Process.Release()
+	// Verify the child actually bound. Without this, a child that fails its
+	// listen exits silently and the next caller spawns another doomed child,
+	// flooding daemon.log and racing on the pid file.
+	if !waitForDaemonReady(3 * time.Second) {
+		return 0, fmt.Errorf("daemon spawned (pid %d) but did not bind within 3s -- check %s", pid, logPath)
+	}
 	return pid, nil
 }
 
@@ -562,10 +593,18 @@ func runServe(s *store.Store) error {
 		return fmt.Errorf("start daemon: %w", err)
 	}
 
-	listenAddr := cfg.Bind + ":" + cfg.Port
+	configuredAddr := cfg.Bind + ":" + cfg.Port
+	_, webAddr, mcpAddr, _ := pidFileData()
 	fmt.Println()
 	fmt.Println(bold.Render("Segments started ") + green.Render("(pid: "+strconv.Itoa(pid)+")"))
-	fmt.Println(dim.Render("  Listening: ") + cyan.Render("http://"+listenAddr))
+	if webAddr != "" {
+		fmt.Println(dim.Render("  Web: ") + cyan.Render("http://"+webAddr))
+	} else {
+		fmt.Println(dim.Render("  Web: ") + yellow.Render("disabled") + dim.Render(" (configured "+configuredAddr+" already in use; edit ~/.segments/config.yaml port: \"<n>\" then sg stop && sg start)"))
+	}
+	if mcpAddr != "" {
+		fmt.Println(dim.Render("  MCP: ") + cyan.Render("http://"+mcpAddr) + dim.Render(" (auto-allocated)"))
+	}
 	fmt.Println(bold.Render("Run: ") + cyan.Render("sg list") + dim.Render(" | sg help"))
 	fmt.Println()
 	return nil
@@ -1894,7 +1933,7 @@ func ensureDataDir() error {
 	return nil
 }
 
-const defaultConfigYAML = `port: "8765"
+const defaultConfigYAML = `port: "7765"
 bind: "127.0.0.1"
 data_dir: "~/.segments"
 
@@ -3258,21 +3297,22 @@ func mcpServer() error {
 // ensureDaemon returns as soon as the child process is spawned, which is
 // before it binds its listener; without this wait the very first
 // forwardMCP can race the listener and trigger a superfluous retry.
-func waitForDaemonReady(deadline time.Duration) {
+func waitForDaemonReady(deadline time.Duration) bool {
 	end := time.Now().Add(deadline)
 	for time.Now().Before(end) {
-		if _, addr, err := pidFileData(); err == nil && addr != "" {
-			if !strings.Contains(addr, ":") {
-				addr = "127.0.0.1:" + addr
+		if _, _, mcpAddr, err := pidFileData(); err == nil && mcpAddr != "" {
+			if !strings.Contains(mcpAddr, ":") {
+				mcpAddr = "127.0.0.1:" + mcpAddr
 			}
-			conn, err := net.DialTimeout("tcp", addr, 100*time.Millisecond)
+			conn, err := net.DialTimeout("tcp", mcpAddr, 100*time.Millisecond)
 			if err == nil {
 				conn.Close()
-				return
+				return true
 			}
 		}
 		time.Sleep(25 * time.Millisecond)
 	}
+	return false
 }
 
 // forwardMCP POSTs a single JSON-RPC request to the daemon and returns the
@@ -3280,9 +3320,12 @@ func waitForDaemonReady(deadline time.Duration) {
 // 204 No Content (notification path) and the caller should not write to
 // stdout.
 func forwardMCP(client *http.Client, req map[string]interface{}, cwd, projectIDEnv, agentName, agentVersion string) (map[string]interface{}, error) {
-	pid, addr, err := pidFileData()
+	pid, _, addr, err := pidFileData()
 	if err != nil {
 		return nil, err
+	}
+	if addr == "" {
+		return nil, fmt.Errorf("daemon mcp address missing from pid file")
 	}
 	if p, err := os.FindProcess(pid); err != nil || p.Pid != pid {
 		return nil, fmt.Errorf("daemon pid %d not alive", pid)

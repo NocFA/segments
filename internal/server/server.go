@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -9,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"codeberg.org/nocfa/segments/internal/analytics"
@@ -46,16 +48,18 @@ type Config struct {
 type MCPHandler func(req map[string]interface{}, headers http.Header) map[string]interface{}
 
 type Server struct {
-	store       *store.Store
-	hub         *Hub
-	addr        string
-	bind        string
-	pidFile     string
-	mux         *http.ServeMux
-	http        *http.Server
-	config      *Config
-	exporter    *export.Writer
-	mcpHandler  MCPHandler
+	store      *store.Store
+	hub        *Hub
+	addr       string
+	bind       string
+	webAddr    string
+	mcpAddr    string
+	pidFile    string
+	mux        *http.ServeMux
+	http       *http.Server
+	config     *Config
+	exporter   *export.Writer
+	mcpHandler MCPHandler
 }
 
 func NewServer(store *store.Store, hub *Hub, cfg *Config, pidFile string) *Server {
@@ -169,32 +173,78 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.mux.ServeHTTP(w, r)
 }
 
+// Start binds two listeners that share the same handler:
+//
+//   - mcp: always-on, OS-allocated port (bind:0). Cannot collide. The CLI MCP
+//     shim and notify path read this from the pid file, so MCP keeps working
+//     even when the configured web port is taken by another tool.
+//   - web: the user-pinned port from config.yaml. On EADDRINUSE the daemon
+//     warns and continues without web (MCP-only mode); operator can switch
+//     ports at their convenience instead of being forced into a port hunt.
 func (s *Server) Start() error {
-	addr := s.addr
-	if !strings.Contains(addr, ":") {
-		addr = s.bind + ":" + addr
+	mcpLn, err := net.Listen("tcp", s.bind+":0")
+	if err != nil {
+		return fmt.Errorf("mcp listener: %w", err)
+	}
+	s.mcpAddr = mcpLn.Addr().String()
+
+	webAddrConfigured := s.addr
+	if !strings.Contains(webAddrConfigured, ":") {
+		webAddrConfigured = s.bind + ":" + webAddrConfigured
+	}
+	var webLn net.Listener
+	if ln, err := net.Listen("tcp", webAddrConfigured); err != nil {
+		if isAddrInUse(err) {
+			fmt.Fprintf(os.Stderr, "warning: web port %s is already in use; web UI disabled\n", webAddrConfigured)
+			fmt.Fprintf(os.Stderr, "  to choose a different port: edit ~/.segments/config.yaml and set\n")
+			fmt.Fprintf(os.Stderr, "    port: \"<n>\"\n")
+			fmt.Fprintf(os.Stderr, "  then run: sg stop && sg start\n")
+			fmt.Fprintf(os.Stderr, "  MCP is still reachable on %s\n", s.mcpAddr)
+		} else {
+			mcpLn.Close()
+			return fmt.Errorf("web listener: %w", err)
+		}
+	} else {
+		webLn = ln
+		s.webAddr = ln.Addr().String()
 	}
 
 	s.http = &http.Server{
-		Addr:         addr,
 		Handler:      s,
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 10 * time.Second,
 	}
 
 	if err := s.writePIDFile(); err != nil {
+		mcpLn.Close()
+		if webLn != nil {
+			webLn.Close()
+		}
 		return fmt.Errorf("write pid file: %w", err)
 	}
 
 	go s.hub.Run()
 
-	ln, err := net.Listen("tcp", addr)
-	if err != nil {
-		return err
+	if webLn != nil {
+		fmt.Printf("Web: http://%s\n", s.webAddr)
+		go func() {
+			if err := s.http.Serve(webLn); err != nil && err != http.ErrServerClosed {
+				fmt.Fprintf(os.Stderr, "web listener stopped: %v\n", err)
+			}
+		}()
 	}
+	fmt.Printf("MCP: http://%s\n", s.mcpAddr)
+	return s.http.Serve(mcpLn)
+}
 
-	fmt.Printf("Server started on %s\n", addr)
-	return s.http.Serve(ln)
+// isAddrInUse returns true for the platform-specific "address already in use"
+// errors (Linux/macOS EADDRINUSE and Windows WSAEADDRINUSE 10048).
+func isAddrInUse(err error) bool {
+	if errors.Is(err, syscall.EADDRINUSE) {
+		return true
+	}
+	const wsaeaddrinuse = syscall.Errno(10048)
+	return errors.Is(err, wsaeaddrinuse)
 }
 
 func (s *Server) Shutdown() error {
@@ -217,11 +267,11 @@ func (s *Server) writePIDFile() error {
 		return err
 	}
 
-	addr := s.addr
-	if !strings.Contains(addr, ":") {
-		addr = s.bind + ":" + addr
+	web := s.webAddr
+	if web == "" {
+		web = "-"
 	}
-	pid := fmt.Sprintf("%d\n%s\n", os.Getpid(), addr)
+	pid := fmt.Sprintf("%d\n%s\n%s\n", os.Getpid(), web, s.mcpAddr)
 	return os.WriteFile(s.pidFile, []byte(pid), 0644)
 }
 
@@ -577,7 +627,7 @@ func LoadConfig(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return &Config{
-			Port:    "8765",
+			Port:    "7765",
 			Bind:    "127.0.0.1",
 			DataDir: "~/.segments",
 		}, nil
@@ -589,7 +639,7 @@ func LoadConfig(path string) (*Config, error) {
 	}
 
 	if cfg.Port == "" {
-		cfg.Port = "8765"
+		cfg.Port = "7765"
 	}
 	if cfg.Bind == "" {
 		cfg.Bind = "127.0.0.1"

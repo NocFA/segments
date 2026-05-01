@@ -1,18 +1,36 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
+import { readFileSync } from "fs";
+import { homedir } from "os";
+import { join } from "path";
 
-const BASE_URL = process.env.SEGMENTS_URL || "http://localhost:8765";
+// Resolved per request so we follow the daemon's actual port even when it
+// auto-allocates around a port conflict. Falls back to env override or the
+// new default so a stopped daemon still produces a sensible error.
+function resolveBaseURL(): string {
+  if (process.env.SEGMENTS_URL) return process.env.SEGMENTS_URL;
+  try {
+    const pidPath = join(homedir(), ".segments", "pid");
+    const lines = readFileSync(pidPath, "utf8").split("\n").map(l => l.trim());
+    const web = lines[1];
+    if (web && web !== "-") return "http://" + web;
+    const mcp = lines[2];
+    if (mcp) return "http://" + mcp;
+  } catch (_) {}
+  return "http://localhost:7765";
+}
 
 export default function (pi: ExtensionAPI) {
   async function request(path: string, method = "GET", body?: object): Promise<any> {
+    const baseURL = resolveBaseURL();
     const args = ["-s", "-f", "-X", method];
     if (body) {
       args.push("-H", "Content-Type: application/json", "-d", JSON.stringify(body));
     }
-    args.push(BASE_URL + path);
+    args.push(baseURL + path);
     const result = await pi.exec("curl", args);
     if (result.code !== 0) {
-      throw new Error("Server not running at " + BASE_URL);
+      throw new Error("Server not running at " + baseURL);
     }
     return JSON.parse(result.stdout);
   }
