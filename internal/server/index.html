@@ -777,6 +777,16 @@ body[data-theme="obsidian"] .graph-svg .g-node.s-closed .g-title { color: var(--
 }
 .kanban-card.seg-unseen::before { border-top-left-radius: inherit; border-bottom-left-radius: inherit; }
 
+/* Graph-view variant: SVG nodes can't use the ::before stripe, so paint a
+   pulsing dot + thin accent stroke on the node body instead. The marks are
+   emitted unconditionally; visibility is gated on .g-node.seg-unseen so the
+   same surgical class-strip used elsewhere (markSeen) clears them without a
+   re-render. */
+.graph-svg .g-node .g-unseen-dot { fill: var(--seg-accent); opacity: 0; pointer-events: none; }
+.graph-svg .g-node.seg-unseen .g-unseen-dot { animation: segUnseenPulse 2.4s ease-in-out infinite; }
+.graph-svg .g-node .g-unseen-glow { fill: none; stroke: var(--seg-accent); stroke-width: 1.5; opacity: 0; pointer-events: none; }
+.graph-svg .g-node.seg-unseen .g-unseen-glow { opacity: 0.55; }
+
 /* a11y: visible focus ring only via keyboard */
 body[data-theme="obsidian"] button:focus-visible,
 body[data-theme="obsidian"] input:focus-visible,
@@ -4693,6 +4703,7 @@ function obsGraphView(T, tasks, byId, ctx) {
     if (isReady) cls.push('ready');
     if (blocks > 0) cls.push('is-blocking');
     if (focus && !focus.has(t.id)) cls.push('off');
+    if (isUnseen(t)) cls.push('seg-unseen');
     const priChip = (t.priority >= 0 && t.priority <= 3)
       ? '<text class="g-pri p-' + t.priority + '" x="' + (layout.W - 8) + '" y="14" text-anchor="end">P' + t.priority + '</text>'
       : '';
@@ -4700,6 +4711,7 @@ function obsGraphView(T, tasks, byId, ctx) {
     return '<g class="' + cls.join(' ') + '" data-act="select" data-id="' + Util.esc(t.id) + '" transform="translate(' + p.x + ',' + p.y + ')">' +
       (isReady ? '<rect class="ring" x="-3" y="-3" width="' + (layout.W + 6) + '" height="' + (layout.H + 6) + '" rx="8"></rect>' : '') +
       '<rect class="bg" width="' + layout.W + '" height="' + layout.H + '" rx="6"></rect>' +
+      '<rect class="g-unseen-glow" width="' + layout.W + '" height="' + layout.H + '" rx="6"></rect>' +
       '<rect class="bar" width="3" height="' + layout.H + '" rx="1.5"></rect>' +
       (blocks > 0 ? '<rect class="bar2" x="3" width="2" height="' + layout.H + '"></rect>' : '') +
       '<text class="g-meta" x="14" y="20">' + Util.esc(Util.shortId(t.id, 8)) + depsTag + '</text>' +
@@ -4707,6 +4719,7 @@ function obsGraphView(T, tasks, byId, ctx) {
       '<foreignObject x="14" y="24" width="' + (layout.W - 36) + '" height="' + (layout.H - 28) + '">' +
         '<div xmlns="http://www.w3.org/1999/xhtml" class="g-title">' + Util.esc(t.title) + '</div>' +
       '</foreignObject>' +
+      '<circle class="g-unseen-dot" cx="' + (layout.W - 7) + '" cy="7" r="2"></circle>' +
     '</g>';
   }).join('');
   const inTree = Store.filter === 'ready';
@@ -5201,6 +5214,7 @@ function conGraphView(T, tasks, byId, ctx) {
     if (isReady) cls.push('ready');
     if (blocks > 0) cls.push('is-blocking');
     if (focus && !focus.has(t.id)) cls.push('off');
+    if (isUnseen(t)) cls.push('seg-unseen');
     const priTag = (t.priority >= 0 && t.priority <= 3)
       ? ' \u00B7 <tspan class="g-pri p-' + t.priority + '">[P' + t.priority + ']</tspan>'
       : '';
@@ -5208,11 +5222,13 @@ function conGraphView(T, tasks, byId, ctx) {
     return '<g class="' + cls.join(' ') + '" data-act="select" data-id="' + Util.esc(t.id) + '" transform="translate(' + p.x + ',' + p.y + ')">' +
       (isReady ? '<rect class="ring" x="-2" y="-2" width="' + (layout.W + 4) + '" height="' + (layout.H + 4) + '"></rect>' : '') +
       '<rect class="bg" width="' + layout.W + '" height="' + layout.H + '"></rect>' +
+      '<rect class="g-unseen-glow" width="' + layout.W + '" height="' + layout.H + '"></rect>' +
       '<text class="g-meta" x="10" y="14">' + Util.esc(Util.shortId(t.id, 8)) + priTag + depsTag + '</text>' +
       '<line class="bar" x1="0" y1="22" x2="' + layout.W + '" y2="22"></line>' +
       '<foreignObject x="10" y="26" width="' + (layout.W - 20) + '" height="' + (layout.H - 30) + '">' +
         '<div xmlns="http://www.w3.org/1999/xhtml" class="g-title">' + Util.esc(t.title) + '</div>' +
       '</foreignObject>' +
+      '<circle class="g-unseen-dot" cx="' + (layout.W - 7) + '" cy="7" r="2"></circle>' +
     '</g>';
   }).join('');
   const inTree = Store.filter === 'ready';
@@ -5686,6 +5702,7 @@ function dosGraphView(T, tasks, byId, ctx) {
     if (isReady) cls.push('ready');
     if (blocks > 0) cls.push('is-blocking');
     if (focus && !focus.has(t.id)) cls.push('off');
+    if (isUnseen(t)) cls.push('seg-unseen');
     const sm = meta[t.status] || { label: '?' };
     const priRoman = (t.priority >= 0 && t.priority <= 3)
       ? ' \u00B7 <tspan class="g-pri p-' + t.priority + '">' + DOS_ROMAN[t.priority] + '</tspan>'
@@ -5694,11 +5711,13 @@ function dosGraphView(T, tasks, byId, ctx) {
     return '<g class="' + cls.join(' ') + '" data-act="select" data-id="' + Util.esc(t.id) + '" transform="translate(' + p.x + ',' + p.y + ')">' +
       (isReady ? '<rect class="ring" x="-4" y="-4" width="' + (layout.W + 8) + '" height="' + (layout.H + 8) + '"></rect>' : '') +
       '<rect class="bg" width="' + layout.W + '" height="' + layout.H + '"></rect>' +
+      '<rect class="g-unseen-glow" width="' + layout.W + '" height="' + layout.H + '"></rect>' +
       '<text class="g-meta" x="12" y="14">' + Util.esc(Util.shortId(t.id, 8)) + priRoman + ' \u00B7 ' + Util.esc(sm.label.toUpperCase()) + depsTag + '</text>' +
       '<line class="bar" x1="12" y1="20" x2="' + (layout.W - 12) + '" y2="20"></line>' +
       '<foreignObject x="12" y="24" width="' + (layout.W - 24) + '" height="' + (layout.H - 30) + '">' +
         '<div xmlns="http://www.w3.org/1999/xhtml" class="g-title">' + Util.esc(t.title) + '</div>' +
       '</foreignObject>' +
+      '<circle class="g-unseen-dot" cx="' + (layout.W - 9) + '" cy="9" r="2"></circle>' +
     '</g>';
   }).join('');
   const inTree = Store.filter === 'ready';
