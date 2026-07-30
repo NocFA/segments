@@ -8,3 +8,7 @@ opencode.json
 /bin/
 scripts/dev-install.sh
 scripts/dev-install.ps1
+
+# mapbridge dev: local C toolchain + dev binary
+/.tmp/
+/segments-dev.exe

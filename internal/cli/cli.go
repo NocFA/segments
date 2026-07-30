@@ -353,6 +353,7 @@ var cmdGroups = []struct {
 		{"init", "initialize a project in the current directory", nil},
 		{"beads", "import tasks from Beads", nil},
 		{"export", "dump task state as JSONL for git-workflow snapshots", nil},
+		{"map", "materialize or sync a wayfinder map", nil},
 		{"remove", "remove a project", nil},
 		{"uninstall", "remove segments and all data", nil},
 	}},
@@ -518,6 +519,8 @@ func Run(args []string, version string) error {
 		return runBeads(s, rest)
 	case "export":
 		return runExport(s, rest)
+	case "map":
+		return runMap(s, rest)
 	case "setup":
 		return runSetup(s)
 	case "shell":
