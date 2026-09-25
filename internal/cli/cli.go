@@ -5,6 +5,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"net"
@@ -349,7 +350,7 @@ var cmdGroups = []struct {
 		{"rename", "rename a project", nil},
 	}},
 	{"Setup", []cmdInfo{
-		{"setup", "configure integrations (required first)", []string{"install"}},
+		{"setup", "configure integrations (required first; --headless for installers)", []string{"install"}},
 		{"init", "initialize a project in the current directory", nil},
 		{"beads", "import tasks from Beads", nil},
 		{"export", "dump task state as JSONL for git-workflow snapshots", nil},
@@ -519,7 +520,7 @@ func Run(args []string, version string) error {
 	case "export":
 		return runExport(s, rest)
 	case "setup":
-		return runSetup(s)
+		return runSetup(s, rest)
 	case "shell":
 		runHelp()
 		return nil
@@ -2656,9 +2657,45 @@ func setupIntegrations(s *store.Store, scope installScope, cwd, home, bin string
 	}
 }
 
-func runSetup(s *store.Store) error {
+func runSetup(s *store.Store, args []string) error {
+	flags := flag.NewFlagSet("setup", flag.ContinueOnError)
+	headless := flags.Bool("headless", false, "complete setup without prompts or integrations")
+	autostart := flags.Bool("autostart", false, "install login autostart (requires --headless)")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if *autostart && !*headless {
+		return fmt.Errorf("--autostart requires --headless")
+	}
+	if flags.NArg() > 0 {
+		return fmt.Errorf("unexpected setup argument: %s", flags.Arg(0))
+	}
+
 	if err := ensureDataDir(); err != nil {
 		return err
+	}
+
+	// Installers (T3-Nocturne) register the MCP server themselves and need no prompts.
+	if *headless {
+		if err := markSetupComplete(); err != nil {
+			return err
+		}
+		if !*autostart {
+			fmt.Println("Segments is set up.")
+			return nil
+		}
+		bin, err := os.Executable()
+		if err != nil {
+			return err
+		}
+		if bin, err = filepath.EvalSymlinks(bin); err != nil {
+			return err
+		}
+		if err := serviceIntegration(bin).setup(); err != nil {
+			return fmt.Errorf("install autostart: %w", err)
+		}
+		fmt.Println("Segments is set up. Autostart installed.")
+		return nil
 	}
 
 	cwd, _ := os.Getwd()

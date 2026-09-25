@@ -208,6 +208,8 @@ Press `Ctrl+K` (or `Cmd+K` on macOS) anywhere to open the command palette: fuzzy
 
 Run `sg setup` once to configure globally, or `sg init` inside a project directory for local config.
 
+Installers can run `sg setup --headless [--autostart]` to mark setup complete without prompts or agent integrations.
+
 The Claude Code integration exposes MCP tools for creating, updating, listing, and deleting tasks, with bulk variants (`segments_create_tasks`, `segments_update_tasks`, `segments_delete_tasks`) to scaffold or sweep whole queues in one round-trip. `segments_create_tasks` understands `#0..#N` back-references so dependency chains can be wired up inline. A SessionStart hook injects the current project context into every new Claude session, and `project_id` auto-resolves from the CWD so most calls can omit it.
 
 ### Claude Code: avoiding first-call friction

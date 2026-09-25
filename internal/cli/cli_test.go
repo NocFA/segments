@@ -46,6 +46,43 @@ func TestCoerceInt(t *testing.T) {
 	}
 }
 
+func TestRunSetupHeadless(t *testing.T) {
+	dir := t.TempDir()
+	home := t.TempDir()
+	originalDataDir := dataDir
+	dataDir = dir
+	t.Cleanup(func() { dataDir = originalDataDir })
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	for range 2 {
+		if err := runSetup(nil, []string{"--headless"}); err != nil {
+			t.Fatalf("runSetup: %v", err)
+		}
+	}
+
+	if !fileExists(filepath.Join(dir, ".setup_complete")) {
+		t.Fatal("setup marker was not created")
+	}
+	if !fileExists(filepath.Join(dir, "config.yaml")) {
+		t.Fatal("config.yaml was not created")
+	}
+	entries, err := os.ReadDir(home)
+	if err != nil {
+		t.Fatalf("read temp HOME: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("headless setup wrote under HOME: %v", entries)
+	}
+}
+
+func TestRunSetupAutostartRequiresHeadless(t *testing.T) {
+	err := runSetup(nil, []string{"--autostart"})
+	if err == nil || err.Error() != "--autostart requires --headless" {
+		t.Fatalf("runSetup error = %v, want --autostart requires --headless", err)
+	}
+}
+
 func TestCallToolCreateTaskPriorityAsString(t *testing.T) {
 	// Guard: the MCP schema says priority is a "number", but real clients
 	// occasionally send it as a string at the top level. callTool must
